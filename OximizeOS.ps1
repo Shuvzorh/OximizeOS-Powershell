@@ -9543,7 +9543,12 @@ $pipelineScript = {
             $normalizedArgs += $text
         }
         $stdoutAndErr = & dism.exe @normalizedArgs 2>&1
+        $nativeSucceeded = $?
         $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode -or ($exitCode -is [string] -and [string]::IsNullOrWhiteSpace($exitCode))) {
+            $exitCode = if ($nativeSucceeded) { 0 } else { -1 }
+            try { RS-Log ("WARNING: DISM returned an empty exit code; inferred {0} from command success state." -f $exitCode) -Color Yellow } catch { try { Write-Host ("[{0}] WARNING: DISM returned an empty exit code; inferred {1} from command success state." -f (Get-Date -Format 'HH:mm:ss'), $exitCode) } catch {} }
+        }
         if ($stdoutAndErr) {
             $dismText = ($stdoutAndErr -join "`n")
             try { RS-Log $dismText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $dismText) } catch {} }
@@ -12695,9 +12700,23 @@ $pipelineScript = {
             $bootDataStr = "2#p0,e,b$etfsboot#pEF,e,b$efisys"
             $oscdArgs = @('-m', '-o', '-u2', '-udfver102', "-bootdata:$bootDataStr", $mountDir, $outISO)
             RS-Log "Running: $oscdimg $($oscdArgs -join ' ')" -Color White
-            $oscdOutput = & $oscdimg @oscdArgs 2>&1
-            $oscdExit = $LASTEXITCODE
-            if ($oscdOutput) { RS-Log ($oscdOutput -join "`n") }
+            $oscdStdOutPath = Join-Path $scrDir 'oscdimg.stdout.log'
+            $oscdStdErrPath = Join-Path $scrDir 'oscdimg.stderr.log'
+            try { Remove-Item -LiteralPath $oscdStdOutPath -Force -ErrorAction SilentlyContinue } catch {}
+            try { Remove-Item -LiteralPath $oscdStdErrPath -Force -ErrorAction SilentlyContinue } catch {}
+            $oscdProc = Start-Process -FilePath $oscdimg -ArgumentList $oscdArgs -PassThru -Wait -NoNewWindow -RedirectStandardOutput $oscdStdOutPath -RedirectStandardError $oscdStdErrPath
+            $oscdExit = 0
+            try { $oscdExit = [int]$oscdProc.ExitCode } catch { $oscdExit = -1 }
+            $oscdStdOut = @()
+            $oscdStdErr = @()
+            if (Test-Path -LiteralPath $oscdStdOutPath) {
+                try { $oscdStdOut = Get-Content -LiteralPath $oscdStdOutPath -ErrorAction SilentlyContinue } catch {}
+            }
+            if (Test-Path -LiteralPath $oscdStdErrPath) {
+                try { $oscdStdErr = Get-Content -LiteralPath $oscdStdErrPath -ErrorAction SilentlyContinue } catch {}
+            }
+            if ($oscdStdOut -and $oscdStdOut.Count -gt 0) { RS-Log ($oscdStdOut -join "`n") }
+            if ($oscdStdErr -and $oscdStdErr.Count -gt 0) { RS-Log ($oscdStdErr -join "`n") -Color Yellow }
             if ($oscdExit -eq 0) {
                 RS-Log "ISO created: $outISO" -Color Green
             }
@@ -12792,9 +12811,27 @@ $pipelineScript = {
         #──────────────────────────────────────────────────────────────────────
         # UNEXPECTED ERROR — graceful abort
         #──────────────────────────────────────────────────────────────────────
-        RS-Log "FATAL ERROR: $_" -Color Red
-        RS-Log "Stack: $($_.ScriptStackTrace)" -Color Red
-        $fatalDetails = [string]$_
+        $errRecord = $_
+        $exType = ''
+        $exMessage = ''
+        try { $exType = [string]$errRecord.Exception.GetType().FullName } catch { $exType = '' }
+        try { $exMessage = [string]$errRecord.Exception.Message } catch { $exMessage = '' }
+        if ([string]::IsNullOrWhiteSpace($exMessage)) {
+            RS-Log "FATAL ERROR: $errRecord" -Color Red
+        }
+        elseif ([string]::IsNullOrWhiteSpace($exType)) {
+            RS-Log "FATAL ERROR: $exMessage" -Color Red
+        }
+        else {
+            RS-Log ("FATAL ERROR: [{0}] {1}" -f $exType, $exMessage) -Color Red
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$errRecord.ScriptStackTrace)) {
+            RS-Log "Stack: $($errRecord.ScriptStackTrace)" -Color Red
+        }
+        elseif ($errRecord.Exception -and -not [string]::IsNullOrWhiteSpace([string]$errRecord.Exception.StackTrace)) {
+            RS-Log "Stack: $($errRecord.Exception.StackTrace)" -Color Red
+        }
+        $fatalDetails = if (-not [string]::IsNullOrWhiteSpace($exMessage)) { $exMessage } else { [string]$errRecord }
         # Emergency cleanup
         if ($sync.IsWimMounted) {
             try {
