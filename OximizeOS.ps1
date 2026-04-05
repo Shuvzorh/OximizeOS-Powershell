@@ -2765,12 +2765,16 @@ if ([string]::IsNullOrWhiteSpace($script:ResolvedScriptDirectory)) {
     }
 }
 $script:IsBootstrapTempRun = $false
+$script:IsTempScriptRun = $false
 if (-not [string]::IsNullOrWhiteSpace([string]$scriptPath)) {
     try {
         $scriptFileName = [System.IO.Path]::GetFileName([string]$scriptPath)
         $scriptFullPath = [System.IO.Path]::GetFullPath([string]$scriptPath)
         $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
         $isUnderTemp = $scriptFullPath.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        if ($isUnderTemp) {
+            $script:IsTempScriptRun = $true
+        }
         if ($isUnderTemp -and $scriptFileName -match '^(?i)OximizeOS_bootstrap_.*\.ps1$') {
             $script:IsBootstrapTempRun = $true
         }
@@ -2778,7 +2782,21 @@ if (-not [string]::IsNullOrWhiteSpace([string]$scriptPath)) {
     catch {}
 }
 
-if ($script:IsBootstrapTempRun) {
+# Preferred log directory can be forced by launcher via env var.
+$script:SessionLogDirectory = ''
+$envLogDir = [string]$env:OXIMIZE_LOG_DIR
+if (-not [string]::IsNullOrWhiteSpace($envLogDir)) {
+    try {
+        $expandedLogDir = [Environment]::ExpandEnvironmentVariables($envLogDir)
+        if (-not [string]::IsNullOrWhiteSpace([string]$expandedLogDir)) {
+            $script:SessionLogDirectory = [System.IO.Path]::GetFullPath($expandedLogDir)
+        }
+    }
+    catch {}
+}
+
+# If script runs from TEMP (common for irm bootstrap), default logs to Documents.
+if ([string]::IsNullOrWhiteSpace($script:SessionLogDirectory) -and ($script:IsBootstrapTempRun -or $script:IsTempScriptRun)) {
     $documentsPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
     if ([string]::IsNullOrWhiteSpace([string]$documentsPath)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
@@ -2792,7 +2810,8 @@ if ($script:IsBootstrapTempRun) {
         $script:SessionLogDirectory = $script:ResolvedScriptDirectory
     }
 }
-else {
+
+if ([string]::IsNullOrWhiteSpace($script:SessionLogDirectory)) {
     $script:SessionLogDirectory = $script:ResolvedScriptDirectory
 }
 $script:SessionLogPath = Join-Path $script:SessionLogDirectory ("OximizeOS_{0}.log" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))

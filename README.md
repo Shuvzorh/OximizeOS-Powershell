@@ -44,6 +44,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -STA -File .\OximizeOS.ps1
 Notes:
 - The script can attempt official Microsoft ADK bootstrap for `oscdimg` if missing.
 - Keep enough free disk space (recommended at least 2x source ISO size).
+- If launched via `irm ".../win.ps1" | iex`, logs are stored in:
+  - `%USERPROFILE%\Documents\OximizeOS\Logs`
 
 ## What OximizeOS Does
 
@@ -72,6 +74,7 @@ Notes:
 - Exports single-edition optimized WIM and rebuilds a bootable BIOS+UEFI ISO.
 - Writes a session log file:
   - `OximizeOS_yyyyMMdd_HHmmss_fff.log`
+  - IRM bootstrap runs save logs under `Documents\OximizeOS\Logs`
 
 ## GUI Pages
 

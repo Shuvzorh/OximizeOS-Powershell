@@ -37,6 +37,13 @@ if (-not (Test-Path -LiteralPath $tempFile)) {
 }
 
 $psExe = Get-WindowsPowerShellPath
+$documentsPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
+if ([string]::IsNullOrWhiteSpace([string]$documentsPath) -and -not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
+    $documentsPath = Join-Path $env:USERPROFILE 'Documents'
+}
+if (-not [string]::IsNullOrWhiteSpace([string]$documentsPath)) {
+    $env:OXIMIZE_LOG_DIR = Join-Path $documentsPath 'OximizeOS\Logs'
+}
 $startArgs = @(
     '-NoProfile',
     '-ExecutionPolicy', 'Bypass',
