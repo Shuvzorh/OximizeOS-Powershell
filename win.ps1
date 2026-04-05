@@ -22,18 +22,64 @@ function Invoke-DownloadFile {
     Invoke-WebRequest @params | Out-Null
 }
 
-$repoScriptUrl = 'https://raw.githubusercontent.com/Shuvzorh/OximizeOS-Powershell/main/OximizeOS.ps1'
 $tempFile = Join-Path $env:TEMP ("OximizeOS_bootstrap_{0}.ps1" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
 
-try {
-    Invoke-DownloadFile -Url $repoScriptUrl -OutFile $tempFile
-}
-catch {
-    throw "Failed to download OximizeOS.ps1 from '$repoScriptUrl'. Error: $($_.Exception.Message)"
+function Ensure-Utf8Bom {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return
+    }
+
+    $newBytes = New-Object byte[] ($bytes.Length + 3)
+    $newBytes[0] = 0xEF
+    $newBytes[1] = 0xBB
+    $newBytes[2] = 0xBF
+    [System.Array]::Copy($bytes, 0, $newBytes, 3, $bytes.Length)
+    [System.IO.File]::WriteAllBytes($Path, $newBytes)
 }
 
-if (-not (Test-Path -LiteralPath $tempFile)) {
-    throw "Downloaded script not found at '$tempFile'."
+function Test-ScriptSyntax {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+    return ($null -eq $errors -or $errors.Count -eq 0)
+}
+
+$cacheBuster = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$downloadUrls = @(
+    "https://raw.githubusercontent.com/Shuvzorh/OximizeOS-Powershell/main/OximizeOS.ps1?cb=$cacheBuster",
+    "https://cdn.jsdelivr.net/gh/Shuvzorh/OximizeOS-Powershell@main/OximizeOS.ps1?cb=$cacheBuster"
+)
+
+$downloaded = $false
+$downloadErrors = New-Object System.Collections.Generic.List[string]
+foreach ($url in $downloadUrls) {
+    try {
+        Invoke-DownloadFile -Url $url -OutFile $tempFile
+        if (-not (Test-Path -LiteralPath $tempFile)) {
+            throw "Downloaded file not found at '$tempFile'."
+        }
+
+        Ensure-Utf8Bom -Path $tempFile
+        if (-not (Test-ScriptSyntax -Path $tempFile)) {
+            throw "Downloaded script failed syntax validation."
+        }
+
+        $downloaded = $true
+        break
+    }
+    catch {
+        $downloadErrors.Add(("URL '{0}' failed: {1}" -f $url, $_.Exception.Message))
+    }
+}
+
+if (-not $downloaded) {
+    $detail = ($downloadErrors -join ' | ')
+    throw "Failed to download a valid OximizeOS.ps1 bootstrap payload. $detail"
 }
 
 $psExe = Get-WindowsPowerShellPath
