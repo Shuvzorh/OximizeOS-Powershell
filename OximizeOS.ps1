@@ -9578,6 +9578,37 @@ $pipelineScript = {
         $regType = if ($typeMap.ContainsKey($ValType)) { $typeMap[$ValType] } else { $ValType }
         RS-RunReg 'add' @("$Key", '/v', $ValName, '/t', $regType, '/d', "$ValData", '/f')
     }
+    function RS-UnloadRegistryHiveMounts {
+        param(
+            [string[]]$HiveKeys,
+            [string]$Context = 'cleanup'
+        )
+
+        foreach ($hiveKey in @($HiveKeys)) {
+            $hiveText = [string]$hiveKey
+            if ([string]::IsNullOrWhiteSpace($hiveText)) { continue }
+            if ($hiveText -notmatch '^HKLM\\') { continue }
+
+            $providerPath = 'Registry::HKEY_LOCAL_MACHINE\' + ($hiveText -replace '^HKLM\\', '')
+            if (-not (Test-Path -LiteralPath $providerPath -ErrorAction SilentlyContinue)) { continue }
+
+            try {
+                $unloadOut = & reg.exe unload $hiveText 2>&1
+                $unloadExit = $LASTEXITCODE
+                if ($unloadOut) { RS-LogSafe ($unloadOut -join "`n") -Color White }
+
+                if ($unloadExit -eq 0) {
+                    RS-LogSafe ("Unloaded registry hive mount: {0} ({1})." -f $hiveText, $Context) -Color Yellow
+                }
+                else {
+                    RS-LogSafe ("Registry hive unload warning for {0} ({1}): reg.exe exit {2}." -f $hiveText, $Context, $unloadExit) -Color Yellow
+                }
+            }
+            catch {
+                RS-LogSafe ("Registry hive unload warning for {0} ({1}): {2}" -f $hiveText, $Context, [string]$_) -Color Yellow
+            }
+        }
+    }
     function RS-TestSafeScratchCleanup {
         param(
             [string]$ScratchPath,
@@ -10574,6 +10605,13 @@ $pipelineScript = {
         $localAccountAutoLogin = $false
         $oscdimgResolved = $null
         $exKeys = $sync.ExpeditedKeys
+        $registryHiveMountKeys = @(
+            'HKLM\zCOMPONENTS',
+            'HKLM\zDEFAULT',
+            'HKLM\zNTUSER',
+            'HKLM\zSOFTWARE',
+            'HKLM\zSYSTEM'
+        )
 
         # Harvest checkbox selections via form Invoke
         $checkedAppx = $sync.Form.Invoke([System.Func[object]] {
@@ -11966,8 +12004,19 @@ $pipelineScript = {
             'HKLM\zSOFTWARE'   = "$scrDir2\Windows\System32\config\SOFTWARE"
             'HKLM\zSYSTEM'     = "$scrDir2\Windows\System32\config\SYSTEM"
         }
+        RS-Log "Checking for stale offline hive mounts from previous runs..." -Color White
+        RS-UnloadRegistryHiveMounts -HiveKeys $registryHiveMountKeys -Context 'pre-load'
+        Start-Sleep -Milliseconds 200
         foreach ($h in $hives.GetEnumerator()) {
-            RS-RunReg 'load' @($h.Key, $h.Value)
+            if (-not (Test-Path -LiteralPath $h.Value -PathType Leaf)) {
+                throw ("Offline hive file not found: {0}" -f $h.Value)
+            }
+            try {
+                RS-RunReg 'load' @($h.Key, $h.Value)
+            }
+            catch {
+                throw ("Failed to load offline hive {0} from '{1}'. {2}" -f $h.Key, $h.Value, [string]$_)
+            }
         }
 
         # Apply selected registry tweaks
@@ -12071,9 +12120,7 @@ $pipelineScript = {
 
         # Unload hives (force GC first)
         [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Milliseconds 500
-        foreach ($h in ($hives.Keys | Sort-Object -Descending)) {
-            try { RS-RunReg 'unload' @($h) } catch { RS-Log "Unload warning for $h`: $_" -Color Yellow }
-        }
+        RS-UnloadRegistryHiveMounts -HiveKeys ($hives.Keys | Sort-Object -Descending) -Context 'phase 6 completion'
         RS-Log "Registry hives unloaded." -Color Green
         RS-Progress 55
         RS-CheckCancel
@@ -12731,6 +12778,7 @@ $pipelineScript = {
             }
             catch {}
         }
+        try { RS-UnloadRegistryHiveMounts -HiveKeys $registryHiveMountKeys -Context 'cancel cleanup' } catch {}
         # Delete temp dir only when marker confirms Oximize ownership
         [void](RS-CleanupScratchDirectory -ScratchPath $sync.ScratchDir -MarkerFileName $scratchMarkerName -Context 'cancel')
         RS-Log "Cancel cleanup complete." -Color Yellow
@@ -12761,6 +12809,7 @@ $pipelineScript = {
             }
             catch {}
         }
+        try { RS-UnloadRegistryHiveMounts -HiveKeys $registryHiveMountKeys -Context 'fatal cleanup' } catch {}
         $failureMarker = [string]$sync.ScratchMarkerFileName
         if ([string]::IsNullOrWhiteSpace($failureMarker)) { $failureMarker = '.oximize_scratch.marker' }
         [void](RS-CleanupScratchDirectory -ScratchPath $sync.ScratchDir -MarkerFileName $failureMarker -Context 'failure')
@@ -12775,6 +12824,7 @@ $pipelineScript = {
     }
     finally {
         # Always restore sleep state and mark process done
+        try { RS-UnloadRegistryHiveMounts -HiveKeys $registryHiveMountKeys -Context 'finalizer' } catch {}
         [void][PowerMgmt]::SetThreadExecutionState([PowerMgmt]::ES_CONTINUOUS)
         $sync.ProcessRunning = $false
         $sync.CancelRequested = $false
