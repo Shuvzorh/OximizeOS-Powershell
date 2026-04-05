@@ -9526,6 +9526,23 @@ $pipelineScript = {
     function RS-CheckCancel {
         if ($sync.CancelRequested) { throw [System.OperationCanceledException]"Cancelled" }
     }
+    function RS-LogSafe {
+        param([string]$Msg, [string]$Color = 'White')
+        # Some nested scopes inside the runspace can intermittently fail command lookup.
+        # Keep the build moving by attempting RS-Log first, then host fallback.
+        try {
+            if (Get-Command -Name 'RS-Log' -CommandType Function -ErrorAction SilentlyContinue) {
+                RS-Log -Msg $Msg -Color $Color
+                return
+            }
+        }
+        catch {}
+
+        try {
+            Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Msg)
+        }
+        catch {}
+    }
     function RS-RunDism {
         param([string[]]$DismArgs)
         # Avoid nested quoting like /WimFile:\"X:\path\" under pwsh which DISM parses as invalid syntax.
@@ -9539,7 +9556,7 @@ $pipelineScript = {
         }
         $stdoutAndErr = & dism.exe @normalizedArgs 2>&1
         $exitCode = $LASTEXITCODE
-        if ($stdoutAndErr) { RS-Log ($stdoutAndErr -join "`n") -Color White }
+        if ($stdoutAndErr) { RS-LogSafe ($stdoutAndErr -join "`n") -Color White }
         if ($exitCode -notin @(0, 1641, 3010)) {
             throw ("DISM exited with code {0}. Args: {1}" -f $exitCode, ($normalizedArgs -join ' '))
         }
@@ -9550,7 +9567,7 @@ $pipelineScript = {
         $allArgs = @($SubCmd) + $RegArgs
         $out = & reg.exe @allArgs 2>&1
         $exitCode = $LASTEXITCODE
-        if ($out) { RS-Log ($out -join "`n") -Color White }
+        if ($out) { RS-LogSafe ($out -join "`n") -Color White }
         if ($exitCode -ne 0) {
             throw "reg.exe $SubCmd failed with exit code $exitCode."
         }
