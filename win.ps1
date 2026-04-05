@@ -22,7 +22,7 @@ function Invoke-DownloadFile {
     Invoke-WebRequest @params | Out-Null
 }
 
-$repoScriptUrl = 'https://raw.githubusercontent.com/Shuvzorh/Oximize-OS-Powershell/main/OximizeOS.ps1'
+$repoScriptUrl = 'https://raw.githubusercontent.com/Shuvzorh/OximizeOS-Powershell/main/OximizeOS.ps1'
 $tempFile = Join-Path $env:TEMP ("OximizeOS_bootstrap_{0}.ps1" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
 
 try {
