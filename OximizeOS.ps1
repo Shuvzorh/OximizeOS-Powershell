@@ -243,7 +243,12 @@ $sync = [hashtable]::Synchronized(@{
         WimCompression           = 'Fast'
         UseIntegrityChecks       = $false
         ScratchMarkerFileName    = '.oximize_scratch.marker'
+        ScriptPath               = ''
+        ScriptBuildStamp         = ''
     })
+if (-not [string]::IsNullOrWhiteSpace([string]$scriptPath)) {
+    $sync.ScriptPath = [string]$scriptPath
+}
 #endregion
 
 #region ── Debloat Lists ──────────────────────────────────────────────────────
@@ -9526,23 +9531,6 @@ $pipelineScript = {
     function RS-CheckCancel {
         if ($sync.CancelRequested) { throw [System.OperationCanceledException]"Cancelled" }
     }
-    function RS-LogSafe {
-        param([string]$Msg, [string]$Color = 'White')
-        # Some nested scopes inside the runspace can intermittently fail command lookup.
-        # Keep the build moving by attempting RS-Log first, then host fallback.
-        try {
-            if (Get-Command -Name 'RS-Log' -CommandType Function -ErrorAction SilentlyContinue) {
-                RS-Log -Msg $Msg -Color $Color
-                return
-            }
-        }
-        catch {}
-
-        try {
-            Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Msg)
-        }
-        catch {}
-    }
     function RS-RunDism {
         param([string[]]$DismArgs)
         # Avoid nested quoting like /WimFile:\"X:\path\" under pwsh which DISM parses as invalid syntax.
@@ -9556,7 +9544,10 @@ $pipelineScript = {
         }
         $stdoutAndErr = & dism.exe @normalizedArgs 2>&1
         $exitCode = $LASTEXITCODE
-        if ($stdoutAndErr) { RS-LogSafe ($stdoutAndErr -join "`n") -Color White }
+        if ($stdoutAndErr) {
+            $dismText = ($stdoutAndErr -join "`n")
+            try { RS-Log $dismText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $dismText) } catch {} }
+        }
         if ($exitCode -notin @(0, 1641, 3010)) {
             throw ("DISM exited with code {0}. Args: {1}" -f $exitCode, ($normalizedArgs -join ' '))
         }
@@ -9567,7 +9558,10 @@ $pipelineScript = {
         $allArgs = @($SubCmd) + $RegArgs
         $out = & reg.exe @allArgs 2>&1
         $exitCode = $LASTEXITCODE
-        if ($out) { RS-LogSafe ($out -join "`n") -Color White }
+        if ($out) {
+            $regText = ($out -join "`n")
+            try { RS-Log $regText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $regText) } catch {} }
+        }
         if ($exitCode -ne 0) {
             throw "reg.exe $SubCmd failed with exit code $exitCode."
         }
@@ -9595,17 +9589,20 @@ $pipelineScript = {
             try {
                 $unloadOut = & reg.exe unload $hiveText 2>&1
                 $unloadExit = $LASTEXITCODE
-                if ($unloadOut) { RS-LogSafe ($unloadOut -join "`n") -Color White }
+                if ($unloadOut) {
+                    $unloadText = ($unloadOut -join "`n")
+                    try { RS-Log $unloadText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $unloadText) } catch {} }
+                }
 
                 if ($unloadExit -eq 0) {
-                    RS-LogSafe ("Unloaded registry hive mount: {0} ({1})." -f $hiveText, $Context) -Color Yellow
+                    try { RS-Log ("Unloaded registry hive mount: {0} ({1})." -f $hiveText, $Context) -Color Yellow } catch { try { Write-Host ("[{0}] Unloaded registry hive mount: {1} ({2})." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context) } catch {} }
                 }
                 else {
-                    RS-LogSafe ("Registry hive unload warning for {0} ({1}): reg.exe exit {2}." -f $hiveText, $Context, $unloadExit) -Color Yellow
+                    try { RS-Log ("Registry hive unload warning for {0} ({1}): reg.exe exit {2}." -f $hiveText, $Context, $unloadExit) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): reg.exe exit {3}." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $unloadExit) } catch {} }
                 }
             }
             catch {
-                RS-LogSafe ("Registry hive unload warning for {0} ({1}): {2}" -f $hiveText, $Context, [string]$_) -Color Yellow
+                try { RS-Log ("Registry hive unload warning for {0} ({1}): {2}" -f $hiveText, $Context, [string]$_) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): {3}" -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, [string]$_) } catch {} }
             }
         }
     }
@@ -10612,6 +10609,10 @@ $pipelineScript = {
             'HKLM\zSOFTWARE',
             'HKLM\zSYSTEM'
         )
+        $scriptBuildStamp = [string]$sync.ScriptBuildStamp
+        if (-not [string]::IsNullOrWhiteSpace($scriptBuildStamp)) {
+            RS-Log ("Pipeline script build: {0}" -f $scriptBuildStamp) -Color Cyan
+        }
 
         # Harvest checkbox selections via form Invoke
         $checkedAppx = $sync.Form.Invoke([System.Func[object]] {
@@ -12964,6 +12965,20 @@ $btnStart.Add_Click({
         }.GetNewClosure()
 
         # Reset state
+        try {
+            $resolvedScript = $null
+            if (-not [string]::IsNullOrWhiteSpace([string]$sync.ScriptPath)) {
+                $resolvedScript = Resolve-Path -LiteralPath ([string]$sync.ScriptPath) -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+            if ($null -ne $resolvedScript) {
+                $scriptItem = Get-Item -LiteralPath $resolvedScript.Path -ErrorAction SilentlyContinue
+                if ($null -ne $scriptItem) {
+                    $sync.ScriptBuildStamp = "{0} | LastWrite={1:yyyy-MM-dd HH:mm:ss} | Size={2}" -f [string]$scriptItem.FullName, $scriptItem.LastWriteTime, [string]$scriptItem.Length
+                }
+            }
+        }
+        catch {}
+
         $sync.ProcessRunning = $true
         $sync.CancelRequested = $false
         $sync.IsMounted = $false
