@@ -2,11 +2,10 @@
 
 Windows 11 ISO optimizer with a WinForms GUI built in PowerShell.
 
-Hosted repo: <https://github.com/Shuvzorh/OximizeOS-Powershell>
 
 ![OximizeOS UI](image/OximizeOS.png)
 
-## One-Command Run (IRM/IEX)
+## One-Command Run
 
 Open PowerShell and run:
 
@@ -130,9 +129,3 @@ WIM mount/unmount errors (`0xc1420117`, mount already in use, failed unmount):
 - Legacy alias still works:
   - `.\wimremove.cmd "C:\Path\To\Your\WIMMountFolder"`
 - If you run without an argument, the script will prompt for the mount folder path.
-
-## Security Note
-
-`irm | iex` is convenient but executes remote code directly.  
-If you prefer, review `win.ps1` and `OximizeOS.ps1` first, then run locally.
-
