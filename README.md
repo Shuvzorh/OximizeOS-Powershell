@@ -2,9 +2,6 @@
 
 Windows 11 ISO optimizer with a WinForms GUI built in PowerShell.
 
-
-![OximizeOS UI](image/OximizeOS.png)
-
 ## One-Command Run
 
 Open PowerShell and run:
