@@ -11492,7 +11492,19 @@ $pipelineScript = {
         $sync.WimMountDir = $wimMountDir
 
         RS-Log "Mounting ISO: $srcISO" -Color White
-        $diskImg = Mount-DiskImage -ImagePath $srcISO -PassThru
+        try {
+            $diskImg = Mount-DiskImage -ImagePath $srcISO -PassThru -ErrorAction Stop
+        }
+        catch [Microsoft.Management.Infrastructure.CimException] {
+            $mountError = [string]$_.Exception.Message
+            if ($mountError -match 'corrupted and unreadable') {
+                throw ("Failed to mount source ISO: {0}`nWindows reported: {1}`nThis ISO appears corrupted or unreadable (commonly due to an interrupted/failed prior ISO build). Please select a known-good source ISO and retry." -f $srcISO, $mountError)
+            }
+            throw ("Failed to mount source ISO: {0}`nWindows reported: {1}" -f $srcISO, $mountError)
+        }
+        catch {
+            throw ("Failed to mount source ISO: {0}`nError: {1}" -f $srcISO, $_.Exception.Message)
+        }
         $sync.IsMounted = $true
         $driveLetter = ''
         for ($attempt = 1; $attempt -le 20; $attempt++) {
