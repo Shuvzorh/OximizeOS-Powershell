@@ -11318,7 +11318,7 @@ $pipelineScript = {
                 }
                 '^(?i)Disable NetBIOS over TCP/IP \(NetBT\)$' {
                     $netbiosModeValue = if ($xMode -eq 'Disabled') { 2 } else { 0 }
-                    [void]$extraSecurityFirstStartupLines.Add(("Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter `"IPEnabled = TRUE`" | ForEach-Object { try { [void]`$_.SetTcpipNetbios({0}) } catch { } }" -f $netbiosModeValue))
+                    [void]$extraSecurityFirstStartupLines.Add("Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter `"IPEnabled = TRUE`" | ForEach-Object { try { [void]`$_.SetTcpipNetbios($netbiosModeValue) } catch { } }")
                     continue
                 }
                 '^(?i)Enable DEP \(Data Execution Prevention\)$' {
@@ -13304,6 +13304,34 @@ $btnStart.Add_Click({
 
         # Async invocation — completion callback
         $iaResult = $ps.BeginInvoke()
+        $runspaceCleanupDone = $false
+        $finalizeRunspace = {
+            param([bool]$AttemptEndInvoke = $true)
+            if ($runspaceCleanupDone) { return }
+            $runspaceCleanupDone = $true
+
+            if ($AttemptEndInvoke -and $null -ne $iaResult) {
+                try { $ps.EndInvoke($iaResult) } catch { Write-Log ("Runspace EndInvoke warning: {0}" -f $_.Exception.Message) -Color Yellow }
+            }
+
+            try { $ps.Dispose() } catch { Write-Log ("Runspace dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
+
+            $rsState = ''
+            try { $rsState = [string]$rs.RunspaceStateInfo.State } catch { $rsState = '' }
+            if ($rsState -notin @('Closed', 'BeforeOpen')) {
+                try { $rs.Close() } catch {
+                    $closeMsg = [string]$_.Exception.Message
+                    if ($closeMsg -match '(?i)Global scope cannot be removed') {
+                        Write-Log "Runspace close note: engine scope was already at global during teardown; continuing." -Color Yellow
+                    }
+                    else {
+                        Write-Log ("Runspace close warning: {0}" -f $closeMsg) -Color Yellow
+                    }
+                }
+            }
+            try { $rs.Dispose() } catch { Write-Log ("Runspace final dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
+            $sync.PowerShellInstance = $null
+        }.GetNewClosure()
 
         # Poll for completion without blocking the GUI message pump
         $timer = New-Object System.Windows.Forms.Timer
@@ -13312,11 +13340,7 @@ $btnStart.Add_Click({
                 try {
                     if ($iaResult.IsCompleted) {
                         $timer.Stop()
-                        try { $ps.EndInvoke($iaResult) } catch { Write-Log ("Runspace EndInvoke warning: {0}" -f $_.Exception.Message) -Color Yellow }
-                        try { $ps.Dispose() } catch { Write-Log ("Runspace dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
-                        try { $rs.Close() } catch { Write-Log ("Runspace close warning: {0}" -f $_.Exception.Message) -Color Yellow }
-                        try { $rs.Dispose() } catch { Write-Log ("Runspace final dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
-                        $sync.PowerShellInstance = $null
+                        & $finalizeRunspace $true
                         return
                     }
 
@@ -13330,9 +13354,7 @@ $btnStart.Add_Click({
                 catch {
                     try { $timer.Stop() } catch {}
                     Write-Log ("UI timer exception while monitoring runspace: {0}" -f $_.Exception.Message) -Color Red
-                    try { $ps.Dispose() } catch {}
-                    try { $rs.Dispose() } catch {}
-                    $sync.PowerShellInstance = $null
+                    & $finalizeRunspace $false
                 }
             })
         $timer.Start()
