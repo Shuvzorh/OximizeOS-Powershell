@@ -1,28 +1,40 @@
 # OximizeOS PowerShell
 
-Windows 11 ISO optimizer with a WinForms GUI built in PowerShell.
+OximizeOS is a PowerShell + WinForms tool that customizes **official Windows 11 ISOs** and rebuilds a bootable BIOS+UEFI ISO.
 
-## One-Command Run
+![OximizeOS GUI](image/OximizeOS.png)
 
-Open PowerShell and run:
+## What It Does
+
+- Mounts a Windows 11 ISO and stages build files in a temporary workspace.
+- Reads `install.wim` (or converts `install.esd` to `install.wim` when needed).
+- Lets you choose the target Windows edition index.
+- Applies debloat, privacy, service, task, feature, capability, and hardening selections.
+- Supports security presets: `Balanced`, `Hardened`, `Maximum`.
+- Supports driver workflows:
+  - Export drivers from the current machine.
+  - Inject `.inf` driver packages into `install.wim`.
+- Merges or uses custom unattended setup XML.
+- Stages custom `.reg`, `.bat`, and `.cmd` payloads.
+- Exports a single-index optimized WIM and builds a bootable ISO.
+
+## Quick Start
+
+### One-command online launcher
 
 ```powershell
 irm "https://raw.githubusercontent.com/Shuvzorh/OximizeOS-Powershell/main/win.ps1" | iex
 ```
 
-This downloads and launches the latest `OximizeOS.ps1` from the GitHub repo.
+This bootstrapper downloads the latest `OximizeOS.ps1`, validates syntax, and launches the GUI.
 
-## Run Locally
-
-1. Download or clone this repository.
-2. Open the folder.
-3. Run:
+### Run from local clone
 
 ```powershell
-.\Run Oximize OS.cmd
+& ".\Run Oximize OS.cmd"
 ```
 
-You can also run directly:
+Or run directly:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -STA -File .\OximizeOS.ps1
@@ -31,48 +43,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -STA -File .\OximizeOS.ps1
 ## Requirements
 
 - Windows host.
-- Administrator rights (script auto-elevates).
+- Administrator rights (the script auto-elevates if needed).
+- PowerShell 5.1+.
 - Official Windows 11 ISO source.
-- PowerShell 5.1 or newer.
-- DISM tools available on Windows.
+- DISM tooling available (standard on Windows).
 - `oscdimg.exe` for final ISO creation.
 
-Notes:
-- The script can attempt official Microsoft ADK bootstrap for `oscdimg` if missing.
-- Keep enough free disk space (recommended at least 2x source ISO size).
-- If launched via `irm ".../win.ps1" | iex`, logs are stored in:
-  - `%USERPROFILE%\Documents\OximizeOS\Logs`
+### About `oscdimg.exe`
 
-## What OximizeOS Does
+OximizeOS first checks local paths (including `./tools/oscdimg.exe`). If missing, it attempts an official Microsoft ADK bootstrap path. If provisioning still fails, install ADK Deployment Tools manually:
 
-- Mounts source ISO and copies files to a dedicated temp build directory.
-- Reads `install.wim` or converts `install.esd` to `install.wim`.
-- Lets you select the target edition index.
-- Applies selected debloat actions:
-  - Appx package removal
-  - Optional feature/capability state changes
-  - Scheduled task configuration
-  - Service startup mode configuration
-  - Privacy, security, and advanced registry-backed tweaks
-- Supports security presets:
-  - `Balanced`
-  - `Hardened`
-  - `Maximum`
-- Supports driver workflows:
-  - Export drivers from current system
-  - Inject `.inf` packages into `install.wim`
-- Generates/merges unattended setup XML.
-- Writes first-startup and setup scripts used by the customized image.
-- Stages custom files into ISO payload:
-  - `CustomUnattendXml`
-  - `.reg` files
-  - `.bat`/`.cmd` files
-- Exports single-edition optimized WIM and rebuilds a bootable BIOS+UEFI ISO.
-- Writes a session log file:
-  - `OximizeOS_yyyyMMdd_HHmmss_fff.log`
-  - IRM bootstrap runs save logs under `Documents\OximizeOS\Logs`
+https://learn.microsoft.com/windows-hardware/get-started/adk-install
 
-## GUI Pages
+## Build Flow
+
+1. Choose **Source ISO**, **Output ISO**, and **Temp Build Directory**.
+2. Select app packages, features/capabilities, task/service settings, and security/privacy options.
+3. (Optional) add custom unattend XML, `.reg`, and setup scripts.
+4. Start the build and monitor live logs.
+5. OximizeOS performs mount -> modify -> commit -> export -> ISO rebuild.
+
+## GUI Areas
 
 - App Packages
 - Features & Capabilities
@@ -83,46 +74,67 @@ Notes:
 - Task Scheduler
 - Windows Services
 - Advanced Setup
-- Logs (shown standalone while build runs)
+- Logs
 
 ## Configuration Profiles
 
-The Settings menu supports:
+Use **Settings -> Import/Export** to save and reuse profile files:
 
-- `Import` (`.ox`)
-- `Export` (`.ox`)
+- Import: `*.ox`
+- Export: `*.ox`
 
-Use this to reuse your tuning profile across multiple ISOs.
+## Logging
 
-## Typical Build Flow
+Session logs are named:
 
-1. Select Source ISO, Output ISO path, and TempBuildDirectory.
-2. Choose your debloat/security/privacy options.
-3. Start build and monitor live logs.
-4. Oximize performs mount -> modify -> commit -> rebuild.
-5. Final ISO is written to your output path.
+`OximizeOS_yyyyMMdd_HHmmss_fff.log`
+
+Default log location:
+
+- Normal local run: script directory.
+- Bootstrap/temp run (including `irm ... | iex`):
+  `%USERPROFILE%\Documents\OximizeOS\Logs`
 
 ## Troubleshooting
 
-`oscdimg.exe` missing:
-- Install Windows ADK Deployment Tools, or place `oscdimg.exe` in:
-  - `.\tools\oscdimg.exe`
-  - or next to `OximizeOS.ps1`
+### `oscdimg.exe` not found
 
-Source ISO rejected:
-- Use an official Windows 11 ISO.
-- Windows 10 images are blocked by design.
+- Install ADK Deployment Tools, or
+- Place `oscdimg.exe` in one of these locations:
+  - `./tools/oscdimg.exe`
+  - next to `OximizeOS.ps1`
 
-Low disk space:
-- Free more space or use a drive with higher free capacity.
+### Source ISO rejected
 
-Output ISO disappears:
-- Do not place output path inside TempBuildDirectory.
-- TempBuildDirectory is cleaned after successful runs.
+- Only Windows 11 ISOs are supported.
+- Windows 10 sources are blocked by design.
 
-WIM mount/unmount errors (`0xc1420117`, mount already in use, failed unmount):
-- Run the recovery helper as Administrator:
-  - `.\Fix-Stuck-WIM-Mount.cmd "C:\Path\To\Your\WIMMountFolder"`
-- Legacy alias still works:
-  - `.\wimremove.cmd "C:\Path\To\Your\WIMMountFolder"`
-- If you run without an argument, the script will prompt for the mount folder path.
+### Low disk space / failed export
+
+- Keep free space well above source ISO size (2x minimum recommended).
+- Keep output ISO path outside your temp build directory.
+
+### Stuck WIM mount / unmount errors (`0xc1420117`, mount already in use)
+
+Run as Administrator:
+
+```powershell
+.\Fix-Stuck-WIM-Mount.cmd "C:\Path\To\Your\WIMMountFolder"
+```
+
+Legacy alias (if present in your setup):
+
+```powershell
+.\wimremove.cmd "C:\Path\To\Your\WIMMountFolder"
+```
+
+## Repository Files
+
+- `OximizeOS.ps1` - main GUI and build pipeline.
+- `win.ps1` - online bootstrap launcher.
+- `Run Oximize OS.cmd` - local launcher helper.
+- `Fix-Stuck-WIM-Mount.cmd` - recovery helper for stuck DISM mounts.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
