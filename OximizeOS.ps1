@@ -9580,8 +9580,18 @@ $pipelineScript = {
     function RS-UnloadRegistryHiveMounts {
         param(
             [string[]]$HiveKeys,
-            [string]$Context = 'cleanup'
+            [string]$Context = 'cleanup',
+            [int]$TimeoutMs = 20000,
+            [int]$MaxAttempts = 3
         )
+
+        if ($TimeoutMs -lt 5000) { $TimeoutMs = 5000 }
+        if ($MaxAttempts -lt 1) { $MaxAttempts = 1 }
+
+        $regExe = Join-Path $env:SystemRoot 'System32\reg.exe'
+        if (-not (Test-Path -LiteralPath $regExe -PathType Leaf -ErrorAction SilentlyContinue)) {
+            $regExe = 'reg.exe'
+        }
 
         foreach ($hiveKey in @($HiveKeys)) {
             $hiveText = [string]$hiveKey
@@ -9591,23 +9601,77 @@ $pipelineScript = {
             $providerPath = 'Registry::HKEY_LOCAL_MACHINE\' + ($hiveText -replace '^HKLM\\', '')
             if (-not (Test-Path -LiteralPath $providerPath -ErrorAction SilentlyContinue)) { continue }
 
-            try {
-                $unloadOut = & reg.exe unload $hiveText 2>&1
-                $unloadExit = $LASTEXITCODE
-                if ($unloadOut) {
-                    $unloadText = ($unloadOut -join "`n")
-                    try { RS-Log $unloadText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $unloadText) } catch {} }
+            try { RS-Log ("Unloading registry hive mount: {0} ({1})..." -f $hiveText, $Context) -Color White } catch { try { Write-Host ("[{0}] Unloading registry hive mount: {1} ({2})..." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context) } catch {} }
+            $unloaded = $false
+
+            for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+                if (-not (Test-Path -LiteralPath $providerPath -ErrorAction SilentlyContinue)) {
+                    $unloaded = $true
+                    break
                 }
 
-                if ($unloadExit -eq 0) {
-                    try { RS-Log ("Unloaded registry hive mount: {0} ({1})." -f $hiveText, $Context) -Color Yellow } catch { try { Write-Host ("[{0}] Unloaded registry hive mount: {1} ({2})." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context) } catch {} }
+                $stdOutPath = [System.IO.Path]::GetTempFileName()
+                $stdErrPath = [System.IO.Path]::GetTempFileName()
+                $timedOut = $false
+                $unloadExit = $null
+
+                try {
+                    $proc = Start-Process -FilePath $regExe -ArgumentList @('unload', $hiveText) -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdOutPath -RedirectStandardError $stdErrPath -ErrorAction Stop
+                    $didExit = $proc.WaitForExit($TimeoutMs)
+                    if (-not $didExit) {
+                        $timedOut = $true
+                        try { $proc.Kill() } catch {}
+                        try { [void]$proc.WaitForExit(2000) } catch {}
+                    }
+                    else {
+                        $unloadExit = [int]$proc.ExitCode
+                    }
+
+                    $textParts = @()
+                    if (Test-Path -LiteralPath $stdOutPath -PathType Leaf -ErrorAction SilentlyContinue) {
+                        $stdOutText = [string](Get-Content -LiteralPath $stdOutPath -Raw -ErrorAction SilentlyContinue)
+                        if (-not [string]::IsNullOrWhiteSpace($stdOutText)) { $textParts += $stdOutText.Trim() }
+                    }
+                    if (Test-Path -LiteralPath $stdErrPath -PathType Leaf -ErrorAction SilentlyContinue) {
+                        $stdErrText = [string](Get-Content -LiteralPath $stdErrPath -Raw -ErrorAction SilentlyContinue)
+                        if (-not [string]::IsNullOrWhiteSpace($stdErrText)) { $textParts += $stdErrText.Trim() }
+                    }
+                    if ($textParts.Count -gt 0) {
+                        $unloadText = ($textParts -join "`n")
+                        try { RS-Log $unloadText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $unloadText) } catch {} }
+                    }
+
+                    if (-not $timedOut -and $unloadExit -eq 0) {
+                        $unloaded = $true
+                        try { RS-Log ("Unloaded registry hive mount: {0} ({1}) on attempt {2}/{3}." -f $hiveText, $Context, $attempt, $MaxAttempts) -Color Yellow } catch { try { Write-Host ("[{0}] Unloaded registry hive mount: {1} ({2}) on attempt {3}/{4}." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $attempt, $MaxAttempts) } catch {} }
+                        break
+                    }
+
+                    if ($timedOut) {
+                        try { RS-Log ("Registry hive unload warning for {0} ({1}): timeout after {2} ms (attempt {3}/{4})." -f $hiveText, $Context, $TimeoutMs, $attempt, $MaxAttempts) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): timeout after {3} ms (attempt {4}/{5})." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $TimeoutMs, $attempt, $MaxAttempts) } catch {} }
+                    }
+                    else {
+                        $exitText = if ($null -eq $unloadExit) { '<null>' } else { [string]$unloadExit }
+                        try { RS-Log ("Registry hive unload warning for {0} ({1}): reg.exe exit {2} (attempt {3}/{4})." -f $hiveText, $Context, $exitText, $attempt, $MaxAttempts) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): reg.exe exit {3} (attempt {4}/{5})." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $exitText, $attempt, $MaxAttempts) } catch {} }
+                    }
                 }
-                else {
-                    try { RS-Log ("Registry hive unload warning for {0} ({1}): reg.exe exit {2}." -f $hiveText, $Context, $unloadExit) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): reg.exe exit {3}." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $unloadExit) } catch {} }
+                catch {
+                    try { RS-Log ("Registry hive unload warning for {0} ({1}) on attempt {2}/{3}: {4}" -f $hiveText, $Context, $attempt, $MaxAttempts, [string]$_) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}) on attempt {3}/{4}: {5}" -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $attempt, $MaxAttempts, [string]$_) } catch {} }
+                }
+                finally {
+                    try { Remove-Item -LiteralPath $stdOutPath -Force -ErrorAction SilentlyContinue } catch {}
+                    try { Remove-Item -LiteralPath $stdErrPath -Force -ErrorAction SilentlyContinue } catch {}
+                }
+
+                if (-not $unloaded -and $attempt -lt $MaxAttempts) {
+                    [GC]::Collect()
+                    [GC]::WaitForPendingFinalizers()
+                    Start-Sleep -Milliseconds 300
                 }
             }
-            catch {
-                try { RS-Log ("Registry hive unload warning for {0} ({1}): {2}" -f $hiveText, $Context, [string]$_) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): {3}" -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, [string]$_) } catch {} }
+
+            if (-not $unloaded -and (Test-Path -LiteralPath $providerPath -ErrorAction SilentlyContinue)) {
+                try { RS-Log ("Registry hive unload warning for {0} ({1}): hive still mounted after {2} attempt(s). Build will continue." -f $hiveText, $Context, $MaxAttempts) -Color Yellow } catch { try { Write-Host ("[{0}] Registry hive unload warning for {1} ({2}): hive still mounted after {3} attempt(s). Build will continue." -f (Get-Date -Format 'HH:mm:ss'), $hiveText, $Context, $MaxAttempts) } catch {} }
             }
         }
     }
@@ -13063,16 +13127,30 @@ $btnStart.Add_Click({
         $timer = New-Object System.Windows.Forms.Timer
         $timer.Interval = 500
         $timer.Add_Tick({
-                if ($iaResult.IsCompleted) {
-                    $timer.Stop()
-                    try { $ps.EndInvoke($iaResult) } catch {}
-                    $ps.Dispose()
-                    $rs.Close()
-                    $rs.Dispose()
+                try {
+                    if ($iaResult.IsCompleted) {
+                        $timer.Stop()
+                        try { $ps.EndInvoke($iaResult) } catch { Write-Log ("Runspace EndInvoke warning: {0}" -f $_.Exception.Message) -Color Yellow }
+                        try { $ps.Dispose() } catch { Write-Log ("Runspace dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
+                        try { $rs.Close() } catch { Write-Log ("Runspace close warning: {0}" -f $_.Exception.Message) -Color Yellow }
+                        try { $rs.Dispose() } catch { Write-Log ("Runspace final dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
+                        $sync.PowerShellInstance = $null
+                        return
+                    }
+
+                    # Check for pipeline errors surfaced to sync.
+                    $hadErrors = $false
+                    try { $hadErrors = [bool]$ps.HadErrors } catch { $hadErrors = $false }
+                    if ($hadErrors) {
+                        try { $ps.Streams.Error | ForEach-Object { Write-Log "RS error: $_" -Color Red } } catch {}
+                    }
                 }
-                # Check for pipeline errors surfaced to sync
-                if ($ps.HadErrors) {
-                    $ps.Streams.Error | ForEach-Object { Write-Log "RS error: $_" -Color Red }
+                catch {
+                    try { $timer.Stop() } catch {}
+                    Write-Log ("UI timer exception while monitoring runspace: {0}" -f $_.Exception.Message) -Color Red
+                    try { $ps.Dispose() } catch {}
+                    try { $rs.Dispose() } catch {}
+                    $sync.PowerShellInstance = $null
                 }
             })
         $timer.Start()
