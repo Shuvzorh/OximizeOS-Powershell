@@ -7423,8 +7423,18 @@ function Convert-PrivacySelectionsToRegistryTweaks {
                 break
             }
             '(?i)^Gaming:\s*Disable Copilot widget$' {
-                & $addSetting 'zSOFTWARE' 'Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions' 'ActivationType' 0 1 'DWord' $hardened
-                & $addSetting 'zSOFTWARE' 'Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions' 'Server' ' ' '' 'String' $hardened
+                # Prefer policy-backed AI/Copilot controls here; WindowsRuntime ActivatableClassId
+                # keys are ACL-protected in many images and frequently fail offline.
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 0 'DWord' $hardened
+                & $addSetting 'zNTUSER' 'SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'AllowRecallEnablement' 0 1 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableClickToDo' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'TurnOffSavingSnapshots' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableSettingsAgent' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableAgentConnectors' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableAgentWorkspaces' 1 0 'DWord' $hardened
+                & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableRemoteAgentConnectors' 1 0 'DWord' $hardened
                 $matched = $true
                 break
             }
@@ -9559,23 +9569,38 @@ $pipelineScript = {
         return ($stdoutAndErr -join "`n")
     }
     function RS-RunReg {
-        param([string]$SubCmd, [string[]]$RegArgs)
+        param(
+            [string]$SubCmd,
+            [string[]]$RegArgs,
+            [bool]$LogOutputOnSuccess = $true,
+            [bool]$LogOutputOnError = $false
+        )
         $allArgs = @($SubCmd) + $RegArgs
         $out = & reg.exe @allArgs 2>&1
         $exitCode = $LASTEXITCODE
-        if ($out) {
-            $regText = ($out -join "`n")
+        $regText = if ($out) { ($out -join "`n") } else { '' }
+
+        if ($exitCode -eq 0) {
+            if ($LogOutputOnSuccess -and -not [string]::IsNullOrWhiteSpace($regText)) {
+                try { RS-Log $regText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $regText) } catch {} }
+            }
+            return
+        }
+
+        if ($LogOutputOnError -and -not [string]::IsNullOrWhiteSpace($regText)) {
             try { RS-Log $regText -Color White } catch { try { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $regText) } catch {} }
         }
-        if ($exitCode -ne 0) {
+
+        if ([string]::IsNullOrWhiteSpace($regText)) {
             throw "reg.exe $SubCmd failed with exit code $exitCode."
         }
+        throw ("reg.exe {0} failed with exit code {1}. {2}" -f $SubCmd, $exitCode, $regText)
     }
     function RS-SetReg {
         param([string]$Key, [string]$ValName, [object]$ValData, [string]$ValType = 'REG_DWORD')
         $typeMap = @{ DWord = 'REG_DWORD'; String = 'REG_SZ'; ExpandString = 'REG_EXPAND_SZ'; QWord = 'REG_QWORD' }
         $regType = if ($typeMap.ContainsKey($ValType)) { $typeMap[$ValType] } else { $ValType }
-        RS-RunReg 'add' @("$Key", '/v', $ValName, '/t', $regType, '/d', "$ValData", '/f')
+        RS-RunReg 'add' @("$Key", '/v', $ValName, '/t', $regType, '/d', "$ValData", '/f') $false $false
     }
     function RS-UnloadRegistryHiveMounts {
         param(
@@ -10294,8 +10319,18 @@ $pipelineScript = {
                     break
                 }
                 '(?i)^Gaming:\s*Disable Copilot widget$' {
-                    & $addSetting 'zSOFTWARE' 'Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions' 'ActivationType' 0 1 'DWord' $hardened
-                    & $addSetting 'zSOFTWARE' 'Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions' 'Server' ' ' '' 'String' $hardened
+                    # Prefer policy-backed AI/Copilot controls here; WindowsRuntime ActivatableClassId
+                    # keys are ACL-protected in many images and frequently fail offline.
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 0 'DWord' $hardened
+                    & $addSetting 'zNTUSER' 'SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'AllowRecallEnablement' 0 1 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableClickToDo' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'TurnOffSavingSnapshots' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableSettingsAgent' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableAgentConnectors' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableAgentWorkspaces' 1 0 'DWord' $hardened
+                    & $addSetting 'zSOFTWARE' 'Policies\Microsoft\Windows\WindowsAI' 'DisableRemoteAgentConnectors' 1 0 'DWord' $hardened
                     $matched = $true
                     break
                 }
@@ -10536,8 +10571,9 @@ $pipelineScript = {
         if ($SingleLanguageInstaller -and -not [string]::IsNullOrWhiteSpace($InstallerLanguageRaw) -and $InstallerLanguageRaw -ne 'System Default') {
             $resolved = RS-NormalizeLangCode -Code $InstallerLanguageRaw
             if (-not [string]::IsNullOrWhiteSpace($resolved)) { return $resolved }
+            return $fallback
         }
-        return $fallback
+        return $null
     }
 
     function RS-ResolveOscdimgPath {
@@ -10993,7 +11029,8 @@ $pipelineScript = {
         if ($widgetsMode -in @('Enabled', 'Disabled')) {
             $widgetsOff = ($widgetsMode -eq 'Disabled')
             & $addAdvancedReg 'zSOFTWARE' 'Policies\Microsoft\Dsh' 'AllowNewsAndInterests' $(if ($widgetsOff) { 0 } else { 1 }) 'DWord'
-            & $addAdvancedReg 'zNTUSER' 'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarDa' $(if ($widgetsOff) { 0 } else { 1 }) 'DWord'
+            # Apply TaskbarDa at first startup (HKCU live context). Offline Default User hive
+            # writes can be ACL-protected on some builds and cause avoidable access-denied noise.
         }
         if ($appSuggestionsMode -in @('Enabled', 'Disabled')) {
             $blockSuggestions = ($appSuggestionsMode -eq 'Disabled')
@@ -11200,6 +11237,28 @@ $pipelineScript = {
                 & $addExtraReg 'zSOFTWARE' $dotNetPath 'SchUseStrongCrypto' $value 'DWord'
             }
         }.GetNewClosure()
+        $setExtraSchannelCipherState = {
+            param([string[]]$CipherNames, [bool]$DisableCipher)
+            $enabledValue = if ($DisableCipher) { 0 } else { [uint32]0xffffffff }
+            $disabledByDefaultValue = if ($DisableCipher) { 1 } else { 0 }
+            foreach ($cipherName in @($CipherNames)) {
+                if ([string]::IsNullOrWhiteSpace([string]$cipherName)) { continue }
+                $cipherPath = ("ControlSet001\Control\SecurityProviders\SCHANNEL\Ciphers\{0}" -f [string]$cipherName)
+                & $addExtraReg 'zSYSTEM' $cipherPath 'Enabled' $enabledValue 'DWord'
+                & $addExtraReg 'zSYSTEM' $cipherPath 'DisabledByDefault' $disabledByDefaultValue 'DWord'
+            }
+        }.GetNewClosure()
+        $setExtraSchannelHashState = {
+            param([string[]]$HashNames, [bool]$DisableHash)
+            $enabledValue = if ($DisableHash) { 0 } else { [uint32]0xffffffff }
+            $disabledByDefaultValue = if ($DisableHash) { 1 } else { 0 }
+            foreach ($hashName in @($HashNames)) {
+                if ([string]::IsNullOrWhiteSpace([string]$hashName)) { continue }
+                $hashPath = ("ControlSet001\Control\SecurityProviders\SCHANNEL\Hashes\{0}" -f [string]$hashName)
+                & $addExtraReg 'zSYSTEM' $hashPath 'Enabled' $enabledValue 'DWord'
+                & $addExtraReg 'zSYSTEM' $hashPath 'DisabledByDefault' $disabledByDefaultValue 'DWord'
+            }
+        }.GetNewClosure()
         $extraSecurityFirstStartupLines = [System.Collections.Generic.List[string]]::new()
         foreach ($xEntry in $extraSecurityByLabel.GetEnumerator()) {
             $xLabel = [string]$xEntry.Key
@@ -11241,6 +11300,55 @@ $pipelineScript = {
                     & $addExtraReg 'zNTUSER' 'SOFTWARE\Microsoft\Clipboard' 'EnableClipboardHistory' $(if ($disableClipboardSync) { 0 } else { 1 }) 'DWord'
                     & $addExtraReg 'zNTUSER' 'SOFTWARE\Microsoft\Clipboard' 'EnableCloudClipboard' $(if ($disableClipboardSync) { 0 } else { 1 }) 'DWord'
                     & $addExtraReg 'zNTUSER' 'SOFTWARE\Microsoft\Clipboard' 'CloudClipboardAutomaticUpload' $(if ($disableClipboardSync) { 0 } else { 1 }) 'DWord'
+                    continue
+                }
+                '^(?i)Disable AlwaysInstallElevated policy \(Windows Installer\)$' {
+                    $disableAlwaysInstallElevated = ($xMode -eq 'Disabled')
+                    & $addExtraReg 'zSOFTWARE' 'Policies\Microsoft\Windows\Installer' 'AlwaysInstallElevated' $(if ($disableAlwaysInstallElevated) { 0 } else { 1 }) 'DWord'
+                    & $addExtraReg 'zNTUSER' 'SOFTWARE\Policies\Microsoft\Windows\Installer' 'AlwaysInstallElevated' $(if ($disableAlwaysInstallElevated) { 0 } else { 1 }) 'DWord'
+                    continue
+                }
+                '^(?i)Disable lock screen camera access$' {
+                    & $addExtraReg 'zSOFTWARE' 'Policies\Microsoft\Windows\Personalization' 'NoLockScreenCamera' $(if ($xMode -eq 'Disabled') { 1 } else { 0 }) 'DWord'
+                    continue
+                }
+                '^(?i)Disable anonymous share enumeration$' {
+                    & $addExtraReg 'zSYSTEM' 'ControlSet001\Control\Lsa' 'RestrictAnonymous' $(if ($xMode -eq 'Disabled') { 1 } else { 0 }) 'DWord'
+                    continue
+                }
+                '^(?i)Disable NetBIOS over TCP/IP \(NetBT\)$' {
+                    $netbiosModeValue = if ($xMode -eq 'Disabled') { 2 } else { 0 }
+                    [void]$extraSecurityFirstStartupLines.Add(("Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter `"IPEnabled = TRUE`" | ForEach-Object { try { [void]`$_.SetTcpipNetbios({0}) } catch { } }" -f $netbiosModeValue))
+                    continue
+                }
+                '^(?i)Enable DEP \(Data Execution Prevention\)$' {
+                    $depMode = if ($xMode -eq 'Enabled') { 'OptOut' } else { 'OptIn' }
+                    [void]$extraSecurityFirstStartupLines.Add(("bcdedit /set {{current}} nx {0} >`$null 2>&1" -f $depMode))
+                    continue
+                }
+                '^(?i)Enable SEHOP \(Structured Exception Handling Overwrite Protection\)$' {
+                    & $addExtraReg 'zSYSTEM' 'ControlSet001\Control\Session Manager\kernel' 'DisableExceptionChainValidation' $(if ($xMode -eq 'Enabled') { 0 } else { 1 }) 'DWord'
+                    continue
+                }
+                '^(?i)Enable Spectre/Meltdown mitigations \(host OS\)$' {
+                    $hostMitigationsEnabled = ($xMode -eq 'Enabled')
+                    & $addExtraReg 'zSYSTEM' 'ControlSet001\Control\Session Manager\Memory Management' 'FeatureSettingsOverride' $(if ($hostMitigationsEnabled) { 0 } else { 3 }) 'DWord'
+                    & $addExtraReg 'zSYSTEM' 'ControlSet001\Control\Session Manager\Memory Management' 'FeatureSettingsOverrideMask' 3 'DWord'
+                    continue
+                }
+                '^(?i)Enable Spectre/Meltdown mitigations \(Hyper-V\)$' {
+                    if ($xMode -eq 'Enabled') {
+                        & $addExtraReg 'zSOFTWARE' 'Microsoft\Windows NT\CurrentVersion\Virtualization' 'MinVmVersionForCpuBasedMitigations' '1.0' 'String'
+                    }
+                    else {
+                        & $addExtraReg 'zSOFTWARE' 'Microsoft\Windows NT\CurrentVersion\Virtualization' 'MinVmVersionForCpuBasedMitigations' '' 'String'
+                    }
+                    continue
+                }
+                '^(?i)Run DISM component cleanup \(/ResetBase\)$' {
+                    if ($xMode -eq 'Enabled') {
+                        [void]$extraSecurityFirstStartupLines.Add('dism.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase /Quiet /NoRestart | Out-Null')
+                    }
                     continue
                 }
                 '^(?i)Disable Windows PowerShell 2\.0$' {
@@ -11356,11 +11464,34 @@ $pipelineScript = {
                     continue
                 }
                 '^(?i)(Disable RC2 Ciphers|Disable RC4 Ciphers|Disable DES Ciphers|Disable 3DES Ciphers|Disable NULL Ciphers|Disable MD5 Hash Algorithms|Disable SHA-1 Hash Algorithms)$' {
-                    RS-Log ("WARNING: '{0}' is currently a placeholder. Microsoft recommends controlling cipher/hash algorithms via TLS cipher suite order policies." -f $xLabel) -Color Yellow
+                    $disableWeakAlgorithm = ($xMode -eq 'Disabled')
+                    if ($xLabel -match '^(?i)Disable 3DES Ciphers$') {
+                        & $setExtraSchannelCipherState @('Triple DES 168/168') $disableWeakAlgorithm
+                    }
+                    elseif ($xLabel -match '^(?i)Disable DES Ciphers$') {
+                        & $setExtraSchannelCipherState @('DES 56/56') $disableWeakAlgorithm
+                    }
+                    elseif ($xLabel -match '^(?i)Disable RC2 Ciphers$') {
+                        & $setExtraSchannelCipherState @('RC2 40/128', 'RC2 56/128', 'RC2 128/128') $disableWeakAlgorithm
+                    }
+                    elseif ($xLabel -match '^(?i)Disable RC4 Ciphers$') {
+                        & $setExtraSchannelCipherState @('RC4 40/128', 'RC4 56/128', 'RC4 64/128', 'RC4 128/128') $disableWeakAlgorithm
+                    }
+                    elseif ($xLabel -match '^(?i)Disable NULL Ciphers$') {
+                        & $setExtraSchannelCipherState @('NULL') $disableWeakAlgorithm
+                    }
+                    elseif ($xLabel -match '^(?i)Disable MD5 Hash Algorithms$') {
+                        & $setExtraSchannelHashState @('MD5') $disableWeakAlgorithm
+                    }
+                    elseif ($xLabel -match '^(?i)Disable SHA-1 Hash Algorithms$') {
+                        & $setExtraSchannelHashState @('SHA') $disableWeakAlgorithm
+                    }
                     continue
                 }
                 '^(?i)(Disable Insecure TLS Renegotiation)$' {
-                    RS-Log ("WARNING: '{0}' is currently a placeholder and does not have an automatic offline-registry action yet." -f $xLabel) -Color Yellow
+                    $disableInsecureRenegotiation = ($xMode -eq 'Disabled')
+                    & $addExtraReg 'zSYSTEM' 'ControlSet001\Control\SecurityProviders\SCHANNEL' 'AllowInsecureRenegoClients' $(if ($disableInsecureRenegotiation) { 0 } else { 1 }) 'DWord'
+                    & $addExtraReg 'zSYSTEM' 'ControlSet001\Control\SecurityProviders\SCHANNEL' 'AllowInsecureRenegoServers' $(if ($disableInsecureRenegotiation) { 0 } else { 1 }) 'DWord'
                     continue
                 }
                 default {
@@ -11914,36 +12045,66 @@ $pipelineScript = {
         #──────────────────────────────────────────────────────────────────────
         RS-Log '═══════ PHASE 5: Disabling Optional Features ═══════' -Color Cyan
         RS-Progress 43
+        $availableOptionalFeatures = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        try {
+            $optionalFeatureInventory = @(Get-WindowsOptionalFeature -Path $scrDir2 -ErrorAction Stop)
+            foreach ($featureInfo in $optionalFeatureInventory) {
+                $featureName = [string]$featureInfo.FeatureName
+                if ([string]::IsNullOrWhiteSpace($featureName)) { continue }
+                [void]$availableOptionalFeatures.Add($featureName)
+            }
+            RS-Log ("Optional feature inventory loaded: {0} feature name(s)." -f $availableOptionalFeatures.Count) -Color White
+        }
+        catch {
+            RS-Log "Optional feature inventory warning: $_" -Color Yellow
+        }
+        $optionalFeatureAliasMap = @{
+            'MicrosoftWindowsPowerShellV2'     = @('MicrosoftWindowsPowerShellV2', 'WindowsPowerShellV2')
+            'MicrosoftWindowsPowerShellV2Root' = @('MicrosoftWindowsPowerShellV2Root', 'WindowsPowerShellV2Root')
+        }
         foreach ($featEntry in $checkedFeats.GetEnumerator()) {
             RS-CheckCancel
             $feat = $featEntry.Name
             $state = $featEntry.Value
+            $resolvedFeat = [string]$feat
+            if ($resolvedFeat -notlike '*~~~~*' -and $availableOptionalFeatures.Count -gt 0) {
+                if ($optionalFeatureAliasMap.ContainsKey($resolvedFeat)) {
+                    $resolvedCandidate = @($optionalFeatureAliasMap[$resolvedFeat] | Where-Object { $availableOptionalFeatures.Contains([string]$_) } | Select-Object -First 1)
+                    if ($resolvedCandidate.Count -gt 0) {
+                        $resolvedFeat = [string]$resolvedCandidate[0]
+                    }
+                }
+                if (-not $availableOptionalFeatures.Contains($resolvedFeat)) {
+                    RS-Log ("Optional feature missing in image (skipped): {0}" -f $feat) -Color White
+                    continue
+                }
+            }
             try {
                 if ($state -eq 'Disabled') {
-                    if ($feat -like '*~~~~*') {
+                    if ($resolvedFeat -like '*~~~~*') {
                         # Capability
-                        Remove-WindowsCapability -Path $scrDir2 -Name $feat -ErrorAction Stop | Out-Null
-                        RS-Log "Removed capability: $feat" -Color Green
+                        Remove-WindowsCapability -Path $scrDir2 -Name $resolvedFeat -ErrorAction Stop | Out-Null
+                        RS-Log "Removed capability: $resolvedFeat" -Color Green
                     }
                     else {
                         # Optional Feature
-                        Disable-WindowsOptionalFeature -Path $scrDir2 -FeatureName $feat -NoRestart -ErrorAction Stop | Out-Null
-                        RS-Log "Disabled feature: $feat" -Color Green
+                        Disable-WindowsOptionalFeature -Path $scrDir2 -FeatureName $resolvedFeat -NoRestart -ErrorAction Stop | Out-Null
+                        RS-Log "Disabled feature: $resolvedFeat" -Color Green
                     }
                 }
                 elseif ($state -eq 'Enabled') {
-                    if ($feat -like '*~~~~*') {
-                        RS-RunDism @("/Image:$scrDir2", '/Add-Capability', "/CapabilityName:$feat")
-                        RS-Log "Enabled capability: $feat" -Color Green
+                    if ($resolvedFeat -like '*~~~~*') {
+                        RS-RunDism @("/Image:$scrDir2", '/Add-Capability', "/CapabilityName:$resolvedFeat")
+                        RS-Log "Enabled capability: $resolvedFeat" -Color Green
                     }
                     else {
-                        Enable-WindowsOptionalFeature -Path $scrDir2 -FeatureName $feat -NoRestart -ErrorAction Stop | Out-Null
-                        RS-Log "Enabled feature: $feat" -Color Green
+                        Enable-WindowsOptionalFeature -Path $scrDir2 -FeatureName $resolvedFeat -NoRestart -ErrorAction Stop | Out-Null
+                        RS-Log "Enabled feature: $resolvedFeat" -Color Green
                     }
                 }
             }
             catch {
-                RS-Log "WARNING processing optional component $feat`: $_" -Color Yellow
+                RS-Log "WARNING processing optional component $resolvedFeat`: $_" -Color Yellow
             }
         }
         RS-Progress 48
@@ -12118,8 +12279,14 @@ $pipelineScript = {
                 RS-Log "SET $fullKey → $valName = $valData" -Color Green
             }
             catch {
-                $registryApplyWarnings++
-                RS-Log ("Registry tweak warning (skipped): {0} | {1}={2} ({3}) | {4}" -f $fullKey, $valName, $valData, $valType, [string]$_) -Color Yellow
+                $regErr = [string]$_
+                if ($regErr -match '(?i)Access is denied') {
+                    RS-Log ("Registry tweak skipped (protected ACL): {0} | {1}={2} ({3})" -f $fullKey, $valName, $valData, $valType) -Color White
+                }
+                else {
+                    $registryApplyWarnings++
+                    RS-Log ("Registry tweak warning (skipped): {0} | {1}={2} ({3}) | {4}" -f $fullKey, $valName, $valData, $valType, $regErr) -Color Yellow
+                }
                 continue
             }
         }
@@ -12185,18 +12352,24 @@ $pipelineScript = {
                 $svcRegProvider = 'Registry::HKEY_LOCAL_MACHINE\zSYSTEM\' + $cs + '\Services\' + $svcName
                 if (-not (Test-Path -LiteralPath $svcRegProvider)) { continue }
                 try {
-                    RS-RunReg 'add' @($svcReg, '/v', 'Start', '/t', 'REG_DWORD', '/d', $startVal, '/f')
+                    RS-RunReg 'add' @($svcReg, '/v', 'Start', '/t', 'REG_DWORD', '/d', $startVal, '/f') $false $false
                     $updatedSets++
                 }
                 catch {
-                    RS-Log ("Service offline update warning: {0} => {1} ({2}) | {3}" -f $svcName, $svcMode, $cs, $_) -Color Yellow
+                    $svcErr = [string]$_
+                    if ($svcErr -match '(?i)Access is denied') {
+                        RS-Log ("Service offline startup unchanged (protected ACL): {0} => {1} ({2})" -f $svcName, $svcMode, $cs) -Color White
+                    }
+                    else {
+                        RS-Log ("Service offline update warning: {0} => {1} ({2}) | {3}" -f $svcName, $svcMode, $cs, $svcErr) -Color Yellow
+                    }
                 }
             }
             if ($updatedSets -gt 0) {
                 RS-Log ("Service offline startup set: {0} => {1} ({2} control set(s))" -f $svcName, $svcMode, $updatedSets) -Color Green
             }
             else {
-                RS-Log ("Service key missing offline (skipped): {0}" -f $svcName) -Color Yellow
+                RS-Log ("Service key missing offline (skipped): {0}" -f $svcName) -Color White
             }
         }
 
@@ -12347,6 +12520,7 @@ $pipelineScript = {
         $appRuntimeStartupBlock = if ($appRuntimeFirstStartupLines.Count -gt 0) { ($appRuntimeFirstStartupLines -join "`n") + "`n" } else { '' }
         $extraSecurityStartupBlock = if ($extraSecurityFirstStartupLines.Count -gt 0) { ($extraSecurityFirstStartupLines -join "`n") + "`n" } else { '' }
         $privacyStartupBlock = if ($privacyFirstStartupLines.Count -gt 0) { ($privacyFirstStartupLines -join "`n") + "`n" } else { '' }
+        $taskbarWidgetsValue = if ($widgetsMode -eq 'Enabled') { 1 } else { 0 }
 
 
         $fsContent = "# Oximize OS FirstStartup.ps1 — runs once at first logon, then self-deletes`n"
@@ -12363,7 +12537,7 @@ $pipelineScript = {
         $fsContent += "# Apply Start Menu / notification registry keys`n"
         $fsContent += "New-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Force | Out-Null`n"
         $fsContent += "Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarMn'           -Value 0 -Type DWord`n"
-        $fsContent += "Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa'           -Value 0 -Type DWord`n"
+        $fsContent += "Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa'           -Value $taskbarWidgetsValue -Type DWord`n"
         $fsContent += "Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowTaskViewButton'   -Value 0 -Type DWord`n"
         $fsContent += "Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'Start_ShowRecentList' -Value 0 -Type DWord`n"
         $fsContent += "New-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Force | Out-Null`n"
@@ -12494,11 +12668,12 @@ $pipelineScript = {
         }
         RS-Log "Configuring default local account '$localAccountName' in unattend.xml." -Color White
 
-        if ($singleLanguageInstaller -and -not [string]::IsNullOrWhiteSpace($installerLanguageRaw) -and $installerLanguageRaw -ne 'System Default') {
+        $forceInstallerLanguage = $singleLanguageInstaller -and -not [string]::IsNullOrWhiteSpace($installerLanguageRaw) -and $installerLanguageRaw -ne 'System Default' -and -not [string]::IsNullOrWhiteSpace($installerLangCode)
+        if ($forceInstallerLanguage) {
             RS-Log "Single language installer enabled. Using language: $installerLangCode" -Color Cyan
         }
         else {
-            RS-Log "Single language installer disabled (or System Default). Using default language: $installerLangCode" -Color White
+            RS-Log "Single language installer disabled (or System Default). Setup language selection will be shown at boot." -Color White
         }
 
         # Build unattend.xml as concatenated string (avoids here-string column-1 restriction inside runspace block)
@@ -12531,13 +12706,18 @@ $pipelineScript = {
         $unattendXml = "<?xml version='1.0' encoding='utf-8'?>$nl"
         $unattendXml += "<unattend xmlns='urn:schemas-microsoft-com:unattend'>$nl"
         $unattendXml += "  <settings pass='windowsPE'>$nl"
-        $unattendXml += "    <component name='Microsoft-Windows-International-Core-WinPE' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS' xmlns:wcm='http://schemas.microsoft.com/WMIConfig/2002/State'>$nl"
-        $unattendXml += "      <SetupUILanguage><UILanguage>$installerLangCode</UILanguage></SetupUILanguage>$nl"
-        $unattendXml += "      <InputLocale>$installerLangCode</InputLocale><SystemLocale>$installerLangCode</SystemLocale>$nl"
-        $unattendXml += "      <UILanguage>$installerLangCode</UILanguage><UserLocale>$installerLangCode</UserLocale>$nl"
-        $unattendXml += "    </component>$nl"
+        if ($forceInstallerLanguage) {
+            $unattendXml += "    <component name='Microsoft-Windows-International-Core-WinPE' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS' xmlns:wcm='http://schemas.microsoft.com/WMIConfig/2002/State'>$nl"
+            $unattendXml += "      <SetupUILanguage><UILanguage>$installerLangCode</UILanguage></SetupUILanguage>$nl"
+            $unattendXml += "      <InputLocale>$installerLangCode</InputLocale><SystemLocale>$installerLangCode</SystemLocale>$nl"
+            $unattendXml += "      <UILanguage>$installerLangCode</UILanguage><UserLocale>$installerLangCode</UserLocale>$nl"
+            $unattendXml += "    </component>$nl"
+        }
         $unattendXml += "    <component name='Microsoft-Windows-Setup' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS' xmlns:wcm='http://schemas.microsoft.com/WMIConfig/2002/State'>$nl"
-        $unattendXml += "      <UserData><AcceptEula>true</AcceptEula></UserData>$nl"
+        $unattendXml += "      <UserData>$nl"
+        $unattendXml += "        <AcceptEula>true</AcceptEula>$nl"
+        $unattendXml += "        <ProductKey><WillShowUI>Always</WillShowUI></ProductKey>$nl"
+        $unattendXml += "      </UserData>$nl"
         $unattendXml += "      <EnableFirewall>true</EnableFirewall>$nl"
         if (-not [string]::IsNullOrWhiteSpace($windowsPeSetupCommandsXml)) {
             $unattendXml += $windowsPeSetupCommandsXml
@@ -12580,10 +12760,12 @@ $pipelineScript = {
         $unattendXml += "        </SynchronousCommand>$nl"
         $unattendXml += "      </FirstLogonCommands>$nl"
         $unattendXml += "    </component>$nl"
-        $unattendXml += "    <component name='Microsoft-Windows-International-Core' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS' xmlns:wcm='http://schemas.microsoft.com/WMIConfig/2002/State'>$nl"
-        $unattendXml += "      <InputLocale>$installerLangCode</InputLocale><SystemLocale>$installerLangCode</SystemLocale>$nl"
-        $unattendXml += "      <UILanguage>$installerLangCode</UILanguage><UserLocale>$installerLangCode</UserLocale>$nl"
-        $unattendXml += "    </component>$nl"
+        if ($forceInstallerLanguage) {
+            $unattendXml += "    <component name='Microsoft-Windows-International-Core' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS' xmlns:wcm='http://schemas.microsoft.com/WMIConfig/2002/State'>$nl"
+            $unattendXml += "      <InputLocale>$installerLangCode</InputLocale><SystemLocale>$installerLangCode</SystemLocale>$nl"
+            $unattendXml += "      <UILanguage>$installerLangCode</UILanguage><UserLocale>$installerLangCode</UserLocale>$nl"
+            $unattendXml += "    </component>$nl"
+        }
         $unattendXml += "  </settings>$nl"
         $unattendXml += "</unattend>$nl"
 
