@@ -254,6 +254,7 @@ $sync = [hashtable]::Synchronized(@{
         SelectedIndex            = 1
         ProcessRunning           = $false
         CancelRequested          = $false
+        BuildPollTimer           = $null
         CheckedAppx              = @()
         AppxSelectionExpansions  = @{}
         CheckedFeatures          = @()
@@ -3388,6 +3389,7 @@ $advancedPanel.Padding = New-Object System.Windows.Forms.Padding(8)
 
 # ── Browse Dialogs ────────────────────────────────────────────────────────
 $btnBrowseSrc.Add_Click({
+        $ofd = $null
         try {
             $ofd = New-Object System.Windows.Forms.OpenFileDialog
             $ofd.Filter = 'ISO Images (*.iso)|*.iso|All Files (*.*)|*.*'
@@ -3406,8 +3408,10 @@ $btnBrowseSrc.Add_Click({
             }
         }
         catch { [System.Windows.Forms.MessageBox]::Show("Error: $_", "Error", "OK", "Error") }
+        finally { if ($null -ne $ofd) { try { $ofd.Dispose() } catch {} } }
     })
 $btnBrowseOut.Add_Click({
+        $sfd = $null
         try {
             $sfd = New-Object System.Windows.Forms.SaveFileDialog
             $sfd.Title = 'Select Output ISO File'
@@ -3423,6 +3427,7 @@ $btnBrowseOut.Add_Click({
             }
         }
         catch { [System.Windows.Forms.MessageBox]::Show("Error: $_", "Error", "OK", "Error") }
+        finally { if ($null -ne $sfd) { try { $sfd.Dispose() } catch {} } }
     })
 $btnBrowseScr.Add_Click({
         try {
@@ -6335,6 +6340,7 @@ $btnBrowseCustomXml.Left = 580
 $btnBrowseCustomXml.Top = 146
 
 $btnBrowseCustomXml.Add_Click({
+        $ofdXml = $null
         try {
             $ofdXml = New-Object System.Windows.Forms.OpenFileDialog
             $ofdXml.Title = 'Select Custom unattend.xml'
@@ -6354,6 +6360,7 @@ $btnBrowseCustomXml.Add_Click({
         catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to select XML file.`n`n$_", "XML Picker", "OK", "Error") | Out-Null
         }
+        finally { if ($null -ne $ofdXml) { try { $ofdXml.Dispose() } catch {} } }
     }.GetNewClosure())
 
 $layoutCustomXmlRow = {
@@ -6494,12 +6501,13 @@ $btnBrowseCustomReg.Top = 188
 $btnRemoveCustomReg = New-DarkButton -Text 'Remove' -Width 88 -Height 34 -Role 'Danger'
 $btnRemoveCustomReg.Top = 188
 $btnBrowseCustomReg.Add_Click({
+        $ofdReg = $null
         try {
             $ofdReg = New-Object System.Windows.Forms.OpenFileDialog
             $ofdReg.Title = 'Select Custom .reg File(s)'
             $ofdReg.Filter = 'Registry Files (*.reg)|*.reg|All Files (*.*)|*.*'
             $ofdReg.Multiselect = $true
-            if ($sync.CustomRegFiles.Count -gt 0 -and (Test-Path -LiteralPath $sync.CustomRegFiles[0] -PathType Leaf)) {
+            if (@($sync.CustomRegFiles).Count -gt 0 -and (Test-Path -LiteralPath $sync.CustomRegFiles[0] -PathType Leaf)) {
                 $ofdReg.InitialDirectory = Split-Path -Parent $sync.CustomRegFiles[0]
             }
             if ($ofdReg.ShowDialog($form) -eq 'OK') {
@@ -6514,6 +6522,7 @@ $btnBrowseCustomReg.Add_Click({
         catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to select .reg files.`n`n$_", "REG Picker", "OK", "Error") | Out-Null
         }
+        finally { if ($null -ne $ofdReg) { try { $ofdReg.Dispose() } catch {} } }
     }.GetNewClosure())
 $btnRemoveCustomReg.Add_Click({
         $existingFiles = @($sync.CustomRegFiles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
@@ -6591,12 +6600,13 @@ $btnBrowseCustomBat.Top = 230
 $btnRemoveCustomBat = New-DarkButton -Text 'Remove' -Width 88 -Height 34 -Role 'Danger'
 $btnRemoveCustomBat.Top = 230
 $btnBrowseCustomBat.Add_Click({
+        $ofdBat = $null
         try {
             $ofdBat = New-Object System.Windows.Forms.OpenFileDialog
             $ofdBat.Title = 'Select Custom .bat/.cmd File(s)'
             $ofdBat.Filter = 'Batch Files (*.bat;*.cmd)|*.bat;*.cmd|All Files (*.*)|*.*'
             $ofdBat.Multiselect = $true
-            if ($sync.CustomBatFiles.Count -gt 0 -and (Test-Path -LiteralPath $sync.CustomBatFiles[0] -PathType Leaf)) {
+            if (@($sync.CustomBatFiles).Count -gt 0 -and (Test-Path -LiteralPath $sync.CustomBatFiles[0] -PathType Leaf)) {
                 $ofdBat.InitialDirectory = Split-Path -Parent $sync.CustomBatFiles[0]
             }
             if ($ofdBat.ShowDialog($form) -eq 'OK') {
@@ -6611,6 +6621,7 @@ $btnBrowseCustomBat.Add_Click({
         catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to select .bat/.cmd files.`n`n$_", "BAT/CMD Picker", "OK", "Error") | Out-Null
         }
+        finally { if ($null -ne $ofdBat) { try { $ofdBat.Dispose() } catch {} } }
     }.GetNewClosure())
 $btnRemoveCustomBat.Add_Click({
         $existingFiles = @($sync.CustomBatFiles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
@@ -7834,10 +7845,15 @@ function Show-CustomTaskDialog {
     $dlg.AcceptButton = $btnOk
     $dlg.CancelButton = $btnCancel
 
-    if ($dlg.ShowDialog($form) -ne 'OK') { return $null }
-    return [ordered]@{
-        Path   = $tbPath.TextBox.Text.Trim()
-        Detail = $tbDetail.TextBox.Text.Trim()
+    try {
+        if ($dlg.ShowDialog($form) -ne 'OK') { return $null }
+        return [ordered]@{
+            Path   = $tbPath.TextBox.Text.Trim()
+            Detail = $tbDetail.TextBox.Text.Trim()
+        }
+    }
+    finally {
+        try { $dlg.Dispose() } catch {}
     }
 }
 
@@ -9514,11 +9530,16 @@ function Show-EditionSelector {
     $edForm.AcceptButton = $btnOk
     $lb.Add_DoubleClick({ $edForm.DialogResult = 'OK'; $edForm.Close() })
 
-    if ($edForm.ShowDialog($form) -eq 'OK') {
-        $sel = $lb.SelectedIndex
-        return $Editions[$sel].ImageIndex
+    try {
+        if ($edForm.ShowDialog($form) -eq 'OK') {
+            $sel = $lb.SelectedIndex
+            return $Editions[$sel].ImageIndex
+        }
+        return $Editions[0].ImageIndex
     }
-    return $Editions[0].ImageIndex
+    finally {
+        try { $edForm.Dispose() } catch {}
+    }
 }
 #endregion
 
@@ -9566,6 +9587,10 @@ function Test-DiskSpace {
         $isoSize = (Get-Item $IsoPath).Length
         $drive = Split-Path $env:USERPROFILE -Qualifier
         $diskInfo = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -like "$drive*" } | Select-Object -First 1
+        if ($null -eq $diskInfo) {
+            Write-Log "Could not determine free disk space for drive $drive — skipping disk space check." -Color Yellow
+            return $true
+        }
         $freeBytes = $diskInfo.Free * 1MB  # PSDrive Free is in MB
         # Re-query via CIM for accuracy
         $wmiDisk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$drive'" -ErrorAction SilentlyContinue
@@ -13453,10 +13478,19 @@ $btnStart.Add_Click({
             }
             try { $rs.Dispose() } catch { Write-Log ("Runspace final dispose warning: {0}" -f $_.Exception.Message) -Color Yellow }
             $sync.PowerShellInstance = $null
+            try {
+                if ($null -ne $sync.BuildPollTimer) {
+                    $sync.BuildPollTimer.Stop()
+                    $sync.BuildPollTimer.Dispose()
+                    $sync.BuildPollTimer = $null
+                }
+            }
+            catch {}
         }.GetNewClosure()
 
         # Poll for completion without blocking the GUI message pump
         $timer = New-Object System.Windows.Forms.Timer
+        $sync.BuildPollTimer = $timer
         $timer.Interval = 500
         $timer.Add_Tick({
                 try {
@@ -13502,6 +13536,14 @@ $form.Add_FormClosing({
             $sync.CancelRequested = $true
             Start-Sleep -Milliseconds 800
         }
+        try {
+            if ($null -ne $sync.BuildPollTimer) {
+                $sync.BuildPollTimer.Stop()
+                $sync.BuildPollTimer.Dispose()
+                $sync.BuildPollTimer = $null
+            }
+        }
+        catch {}
         # Attempt cleanup on exit
         if ($sync.IsWimMounted) {
             try { & dism.exe '/Unmount-Wim' "/MountDir:$($sync.WimMountDir)" '/Discard' 2>&1 | Out-Null } catch {}
