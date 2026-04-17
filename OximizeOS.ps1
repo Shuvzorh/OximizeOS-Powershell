@@ -2890,9 +2890,14 @@ function Write-SessionLogLine {
         [string]$Source = 'APP'
     )
     try {
+        if ([string]::IsNullOrWhiteSpace($script:SessionLogPath)) { return }
         $line = "[{0}] [{1}] [{2}] {3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Source, $Message
         [System.Threading.Monitor]::Enter($script:SessionLogWriteLock)
         try {
+            $logDir = [System.IO.Path]::GetDirectoryName($script:SessionLogPath)
+            if (-not [string]::IsNullOrWhiteSpace($logDir)) {
+                [System.IO.Directory]::CreateDirectory($logDir) | Out-Null
+            }
             [System.IO.File]::AppendAllText($script:SessionLogPath, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
         }
         finally {
@@ -2904,7 +2909,9 @@ function Write-SessionLogLine {
 
 function Initialize-SessionLog {
     try {
-        New-Item -ItemType Directory -Path $script:SessionLogDirectory -Force | Out-Null
+        if (-not [string]::IsNullOrWhiteSpace($script:SessionLogDirectory)) {
+            [System.IO.Directory]::CreateDirectory($script:SessionLogDirectory) | Out-Null
+        }
     }
     catch {}
     $sync.SessionLogPath = $script:SessionLogPath
