@@ -9533,7 +9533,10 @@ function Show-EditionSelector {
     try {
         if ($edForm.ShowDialog($form) -eq 'OK') {
             $sel = $lb.SelectedIndex
-            return $Editions[$sel].ImageIndex
+            if ($sel -is [int] -and $sel -ge 0 -and $sel -lt $Editions.Count) {
+                return $Editions[$sel].ImageIndex
+            }
+            return $Editions[0].ImageIndex
         }
         return $Editions[0].ImageIndex
     }
@@ -9588,8 +9591,8 @@ function Test-DiskSpace {
         $drive = Split-Path $env:USERPROFILE -Qualifier
         $diskInfo = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -like "$drive*" } | Select-Object -First 1
         if ($null -eq $diskInfo) {
-            Write-Log "Could not determine free disk space for drive $drive — skipping disk space check." -Color Yellow
-            return $true
+            Write-Log "ABORT: Could not determine free disk space for drive $drive. Disk space validation failed; operation cannot continue safely." -Color Red
+            return $false
         }
         $freeBytes = $diskInfo.Free * 1MB  # PSDrive Free is in MB
         # Re-query via CIM for accuracy
