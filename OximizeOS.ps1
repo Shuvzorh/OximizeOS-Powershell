@@ -67,6 +67,58 @@ public static class Win32Dpi {
 '@
 }
 [void][Win32Dpi]::SetProcessDPIAware()
+
+if (-not ('Win32Window' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class Win32Window {
+    [DllImport("user32.dll")]
+    public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")]
+    public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    public static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+    public const int GWL_EXSTYLE          = -20;
+    public const int WS_EX_COMPOSITED     = 0x02000000;
+    public const int WM_SETREDRAW         = 0x000B;
+    public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+}
+'@
+}
+
+function Invoke-FreezeRedraw {
+    param([System.Windows.Forms.Control]$Control)
+    if ($null -eq $Control -or -not $Control.IsHandleCreated) { return }
+    try { [void][Win32Window]::SendMessage($Control.Handle, [Win32Window]::WM_SETREDRAW, [IntPtr]::Zero, [IntPtr]::Zero) } catch {}
+}
+function Invoke-ThawRedraw {
+    param([System.Windows.Forms.Control]$Control)
+    if ($null -eq $Control -or -not $Control.IsHandleCreated) { return }
+    try { [void][Win32Window]::SendMessage($Control.Handle, [Win32Window]::WM_SETREDRAW, [IntPtr]1, [IntPtr]::Zero) } catch {}
+    try { $Control.Invalidate($true); $Control.Update() } catch {}
+}
+function Set-DarkScrollbar {
+    param([System.Windows.Forms.Control]$Control, [switch]$Recursive)
+    if ($null -eq $Control) { return }
+    # Only apply to ScrollableControls (panels/flow panels that can have scrollbars)
+    if ($Control -is [System.Windows.Forms.ScrollableControl]) {
+        try {
+            if ($Control.IsHandleCreated) {
+                [void][Win32Window]::SetWindowTheme($Control.Handle, 'DarkMode_Explorer', $null)
+            } else {
+                $Control.Add_HandleCreated({ [void][Win32Window]::SetWindowTheme($this.Handle, 'DarkMode_Explorer', $null) })
+            }
+        } catch {}
+    }
+    if ($Recursive) {
+        foreach ($child in @($Control.Controls)) { Set-DarkScrollbar -Control $child -Recursive }
+    }
+}
 #endregion
 
 #region ── P/Invoke: SetThreadExecutionState ──────────────────────────────────
@@ -188,7 +240,7 @@ $sync = [hashtable]::Synchronized(@{
         CancelButton             = $null
         'Source ISO'             = ''
         'Output Folder'          = ''
-        ScratchDir               = "$env:TEMP\OximizeOS_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        ScratchDir               = ''
         CustomUnattendXml        = ''
         CustomRegFiles           = @()
         CustomBatFiles           = @()
@@ -1976,6 +2028,12 @@ function Enable-ControlDoubleBuffer {
             if ($doubleBufferedProp) {
                 $doubleBufferedProp.SetValue($Control, $true, $null)
             }
+            # Suppress WM_ERASEBKGND on containers to prevent white-flash artifacts
+            $setStyleMethod = $Control.GetType().GetMethod('SetStyle', [System.Reflection.BindingFlags]'NonPublic,Instance')
+            if ($setStyleMethod) {
+                $flags = [System.Windows.Forms.ControlStyles]::AllPaintingInWmPaint -bor [System.Windows.Forms.ControlStyles]::OptimizedDoubleBuffer
+                $setStyleMethod.Invoke($Control, @($flags, $true))
+            }
         }
     }
     catch {}
@@ -2448,7 +2506,9 @@ function New-DarkButton {
                 $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
                 $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
 
-                $parentBack = if ($null -ne $sender.Parent -and -not $sender.Parent.IsDisposed) { $sender.Parent.BackColor } else { $clrBg }
+                $rawParentBack = if ($null -ne $sender.Parent -and -not $sender.Parent.IsDisposed) { $sender.Parent.BackColor } else { $script:clrBg }
+                # Guard against default white/gray parent color during intermediate repaints
+                $parentBack = if ($rawParentBack.GetBrightness() -gt 0.85 -and $script:ThemeMode -eq 'Dark') { $script:clrBg } else { $rawParentBack }
                 $g.Clear($parentBack)
 
                 $tagData = if ($sender.Tag -is [hashtable]) { $sender.Tag } else { @{ Role = 'Normal'; State = 'Normal' } }
@@ -2800,8 +2860,9 @@ if (-not [string]::IsNullOrWhiteSpace($envLogDir)) {
     catch {}
 }
 
-# If script runs from TEMP (common for irm bootstrap), default logs to Documents.
-if ([string]::IsNullOrWhiteSpace($script:SessionLogDirectory) -and ($script:IsBootstrapTempRun -or $script:IsTempScriptRun)) {
+# If script runs from TEMP or via irm|iex (no script file path), default logs to Documents.
+$script:IsInMemoryRun = [string]::IsNullOrWhiteSpace([string]$scriptPath) -and [string]::IsNullOrWhiteSpace([string]$PSScriptRoot)
+if ([string]::IsNullOrWhiteSpace($script:SessionLogDirectory) -and ($script:IsBootstrapTempRun -or $script:IsTempScriptRun -or $script:IsInMemoryRun)) {
     $documentsPath = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
     if ([string]::IsNullOrWhiteSpace([string]$documentsPath)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$env:USERPROFILE)) {
@@ -3051,12 +3112,18 @@ $form.ForeColor = $clrText
 $form.Font = New-UiFont -Size 9
 $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.AutoScroll = $false
+$form.Opacity = 0
 $sync.Form = $form
 if ($workingArea.Width -lt 1180 -or $workingArea.Height -lt 780) {
     $form.WindowState = [System.Windows.Forms.FormWindowState]::Maximized
 }
-# Avoid forcing form-level buffering at startup; some hosts render blank/white
-# artifacts with aggressive buffering on custom-painted WinForms controls.
+# Apply dark title bar and dark scrollbars as soon as the Win32 handle exists.
+$form.Add_HandleCreated({
+        try {
+            $dm = 1
+            [void][Win32Window]::DwmSetWindowAttribute($this.Handle, [Win32Window]::DWMWA_USE_IMMERSIVE_DARK_MODE, [ref]$dm, 4)
+        } catch {}
+    })
 
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $projectIconPath = Get-ProjectIconPath -RootPath $scriptRoot
@@ -3170,18 +3237,23 @@ function Invoke-UiStabilizeRedraw {
 
 function Show-MainUi {
     if ($panelMainUI.Visible -and -not $panelWelcome.Visible) { return }
-    $panelWelcome.Visible = $false
-    $panelMainUI.Visible = $true
-    $panelMainUI.BringToFront()
+    Invoke-FreezeRedraw -Control $form
     $form.SuspendLayout()
+    $panelMainUI.SuspendLayout()
     try {
+        Apply-Theme -Mode $script:ThemeMode
+        Enable-ControlDoubleBuffer -Control $panelMainUI -Recursive
+        $panelWelcome.Visible = $false
+        $panelMainUI.Visible = $true
+        $panelMainUI.BringToFront()
         $panelMainUI.PerformLayout()
         $form.PerformLayout()
         Update-SectionLayout
-        Apply-Theme -Mode $script:ThemeMode
     }
     finally {
+        $panelMainUI.ResumeLayout($true)
         $form.ResumeLayout($true)
+        Invoke-ThawRedraw -Control $form
     }
     try {
         [void]$form.BeginInvoke([System.Action] {
@@ -3279,7 +3351,7 @@ $tbOutputISO = $outRow.TextBox
 $btnBrowseOut = $outRow.Button
 $tbOutputISO.Cursor = 'Hand'
 
-$scratchRow = New-CompactPathRow -LabelText 'TempBuildDirectory:' -DefaultText $sync.ScratchDir -ReadOnly $false -InfoMode 'Folder' -CueText 'Select TempBuildDirectory...' -Top 196 -Parent $topPanel
+$scratchRow = New-CompactPathRow -LabelText 'TempBuildDirectory:' -ReadOnly $false -InfoMode 'Folder' -CueText 'Select TempBuildDirectory...' -Top 196 -Parent $topPanel
 $tbScratch = $scratchRow.TextBox
 $btnBrowseScr = $scratchRow.Button
 $tbScratch.Cursor = 'Hand'
@@ -3412,6 +3484,7 @@ $navPanel.Padding = New-Object System.Windows.Forms.Padding(8, 4, 8, 4)
 $navPanel.BackColor = $clrPanel
 $navPanel.Margin = New-Object System.Windows.Forms.Padding(0)
 $navPanel.Tag = 'NavFlow'
+Set-DarkScrollbar -Control $navPanel
 $navPanel.Add_Resize({
         $targetWidth = [Math]::Max(150, $navPanel.ClientSize.Width - $navPanel.Padding.Horizontal - 2)
         foreach ($ctrl in $navPanel.Controls) {
@@ -3452,6 +3525,7 @@ function Switch-Tab {
     $comboRoot = if ($null -ne $script:ActivePage -and -not $script:ActivePage.IsDisposed) { $script:ActivePage } else { $contentPanel }
     Close-AllComboDropDowns -Root $comboRoot
 
+    Invoke-FreezeRedraw -Control $form
     $contentPanel.SuspendLayout()
     if ($null -ne $mainContainer) { $mainContainer.SuspendLayout() }
     try {
@@ -3487,11 +3561,41 @@ function Switch-Tab {
             $script:LastNonLogPage = $Page
         }
 
-        if ($Page.Visible -ne $true) { $Page.Visible = $true }
+        # Apply double-buffering and pre-size rows before making the page visible to
+        # prevent white-flash and spurious overflow scrollbars on first open.
+        if ($Page.Visible -ne $true) {
+            Enable-ControlDoubleBuffer -Control $Page -Recursive
+            # Recursively pre-size all AutoScroll FlowLayoutPanels (may be nested in bodyPanel)
+            # so row widths are correct before the first WM_PAINT, avoiding overflow scrollbars.
+            $presizeFlows = {
+                param($Root)
+                foreach ($c in @($Root.Controls)) {
+                    if ($c -is [System.Windows.Forms.FlowLayoutPanel] -and $c.AutoScroll) {
+                        try {
+                            $c.SuspendLayout()
+                            $c.HorizontalScroll.Enabled = $false
+                            $c.HorizontalScroll.Visible = $false
+                            $safeW = [Math]::Max(120, $c.ClientSize.Width - $c.Padding.Horizontal - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth - 34)
+                            foreach ($row in @($c.Controls)) {
+                                if ($null -ne $row -and $row -is [System.Windows.Forms.Control] -and $row.Width -ne $safeW) {
+                                    $row.Width = $safeW
+                                }
+                            }
+                        } catch {}
+                        finally { try { $c.ResumeLayout($false) } catch {} }
+                    } elseif ($c.Controls.Count -gt 0) {
+                        & $presizeFlows $c
+                    }
+                }
+            }
+            & $presizeFlows $Page
+            $Page.Visible = $true
+        }
     }
     finally {
         if ($null -ne $mainContainer) { $mainContainer.ResumeLayout() }
         $contentPanel.ResumeLayout()
+        Invoke-ThawRedraw -Control $form
     }
     try {
         [void]$Page.BeginInvoke([System.Action]({
@@ -3855,6 +3959,15 @@ function Register-DeferredRowWidthLayout {
             }
             catch {}
         }.GetNewClosure())
+    # Fix: run applyWidths synchronously the moment the flow becomes visible so row
+    # widths are correct before the first paint, preventing spurious overflow scrollbars.
+    $Flow.Add_VisibleChanged({
+            if ($Flow.Visible -and $Flow.IsHandleCreated) {
+                $Flow.SuspendLayout()
+                try { & $applyWidths } catch {}
+                finally { $Flow.ResumeLayout($false) }
+            }
+        }.GetNewClosure())
     if ($Flow.Parent) {
         $Flow.Parent.Add_Resize({ & $applyWidths }.GetNewClosure())
         $Flow.Parent.Add_VisibleChanged({
@@ -3862,12 +3975,13 @@ function Register-DeferredRowWidthLayout {
             }.GetNewClosure())
     }
 
+    Set-DarkScrollbar -Control $Flow
+    # Run synchronously for initial layout, then async to catch any post-layout adjustments
+    & $applyWidths
     try {
         [void]$Flow.BeginInvoke([System.Action]({ & $applyWidths }.GetNewClosure()))
     }
-    catch {
-        & $applyWidths
-    }
+    catch {}
 }
 
 function Close-AllComboDropDowns {
@@ -6758,6 +6872,7 @@ $logBox.BackColor = $clrLogBg
 $logBox.ForeColor = $clrLogText
 $logBox.Font = New-Object System.Drawing.Font('Consolas', 10)
 $logBox.ScrollBars = 'Vertical'
+Set-DarkScrollbar -Control $logBox
 $logBox.BorderStyle = 'FixedSingle'
 $logBox.HideSelection = $false
 $logBox.WordWrap = $false
@@ -13404,6 +13519,7 @@ $form.Add_Shown({
             Apply-Theme -Mode $script:ThemeMode
             if ($null -ne $panelWelcome -and -not $panelWelcome.IsDisposed) {
                 Enable-ControlDoubleBuffer -Control $panelWelcome -Recursive
+                Set-DarkScrollbar -Control $panelWelcome -Recursive
             }
             if ($null -ne $panelMainUI -and -not $panelMainUI.IsDisposed) {
                 Enable-ControlDoubleBuffer -Control $panelMainUI -Recursive
@@ -13443,6 +13559,10 @@ $form.Add_Shown({
         }
         catch {
             Write-Log "Deferred UI init warning: $_" -Color Yellow
+        }
+        finally {
+            # Reveal the form now that all controls are fully themed — no white flash possible
+            try { if ($form.Opacity -lt 1.0) { $form.Opacity = 1.0 } } catch {}
         }
     })
 [System.Windows.Forms.Application]::Run($form)
