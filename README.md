@@ -2,8 +2,6 @@
 
 OximizeOS is a PowerShell + WinForms tool that customizes **official Windows 11 ISOs** and rebuilds a bootable BIOS+UEFI ISO.
 
-![OximizeOS GUI](image/OximizeOS.png)
-
 ## What It Does
 
 - Mounts a Windows 11 ISO and stages build files in a temporary workspace.
