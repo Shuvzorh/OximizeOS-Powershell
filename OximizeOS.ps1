@@ -2251,6 +2251,62 @@ function Test-ScratchDirectorySafety {
     }
 }
 
+function Get-ScratchDirStatus {
+    param(
+        [string]$ScratchPath,
+        [string]$MarkerFileName = '.oximize_scratch.marker'
+    )
+    $result = [pscustomobject]@{
+        Path            = ''
+        HasMarker       = $false
+        HasFiles        = $false
+        FileCount       = 0
+        TotalSizeMB     = 0.0
+        MarkerTimestamp = $null
+        Status          = 'Invalid'
+    }
+    if ([string]::IsNullOrWhiteSpace($ScratchPath)) { $result.Status = 'Empty'; return $result }
+    if ([string]::IsNullOrWhiteSpace($MarkerFileName)) { $MarkerFileName = '.oximize_scratch.marker' }
+
+    $expanded = [Environment]::ExpandEnvironmentVariables($ScratchPath.Trim().Trim('"'))
+    try { $fullPath = [System.IO.Path]::GetFullPath($expanded) }
+    catch { $result.Status = 'Invalid'; return $result }
+    $result.Path = $fullPath
+
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Container)) {
+        $result.Status = 'DoesNotExist'
+        return $result
+    }
+
+    $markerPath = Join-Path $fullPath $MarkerFileName
+    $result.HasMarker = Test-Path -LiteralPath $markerPath -PathType Leaf
+
+    $allItems = @(Get-ChildItem -LiteralPath $fullPath -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 2000)
+    $result.FileCount = $allItems.Count
+    $result.HasFiles = ($allItems.Count -gt 0)
+    try {
+        $totalBytes = ($allItems | Where-Object { -not $_.PSIsContainer } | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+        if ($null -ne $totalBytes) { $result.TotalSizeMB = [Math]::Round($totalBytes / 1MB, 1) }
+    } catch {}
+
+    if ($result.HasMarker) {
+        try {
+            $markerContent = Get-Content -LiteralPath $markerPath -Raw -ErrorAction SilentlyContinue
+            if ($markerContent -match 'marker\s*-\s*(.+)$') {
+                $result.MarkerTimestamp = [datetime]::Parse($Matches[1].Trim())
+            }
+        } catch {}
+        $nonMarkerItems = @(Get-ChildItem -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $MarkerFileName })
+        $result.Status = if ($nonMarkerItems.Count -gt 0) { 'PreviousBuild' } else { 'Ready' }
+    } elseif ($result.HasFiles) {
+        $result.Status = 'Foreign'
+    } else {
+        $result.Status = 'Empty'
+    }
+
+    return $result
+}
+
 function New-DarkLabel {
     param([string]$Text, [int]$Width = 90, [int]$Height = 22)
     $lbl = New-Object System.Windows.Forms.Label
@@ -3344,7 +3400,7 @@ $panelWelcome.Controls.AddRange(@(
 # ── Top Panel (path rows + option checkboxes) ─────────────────────────────
 $topPanel = New-Object System.Windows.Forms.Panel
 $topPanel.Dock = 'Top'
-$topPanel.Height = 264
+$topPanel.Height = 300
 $topPanel.BackColor = $clrPanel
 $topPanel.Padding = New-Object System.Windows.Forms.Padding(8, 6, 8, 4)
 Set-ModernPanelPaint -Control $topPanel -ShowAccentLine $false
@@ -3363,6 +3419,72 @@ $scratchRow = New-CompactPathRow -LabelText 'TempBuildDirectory:' -ReadOnly $fal
 $tbScratch = $scratchRow.TextBox
 $btnBrowseScr = $scratchRow.Button
 $tbScratch.Cursor = 'Hand'
+
+# ── Scratch Directory Status Indicator ────────────────────────────────────
+$pnlScratchStatus = New-Object System.Windows.Forms.Panel
+$pnlScratchStatus.Left = 8
+$pnlScratchStatus.Top = $scratchRow.Panel.Bottom + 4
+$pnlScratchStatus.Height = 36
+$pnlScratchStatus.Width = [Math]::Max(360, $topPanel.ClientSize.Width - 16)
+$pnlScratchStatus.BackColor = $topPanel.BackColor
+$pnlScratchStatus.Anchor = 'Top, Left, Right'
+$pnlScratchStatus.Visible = $false
+
+$lblScratchStatus = New-Object System.Windows.Forms.Label
+$lblScratchStatus.Left = 2
+$lblScratchStatus.Top = 8
+$lblScratchStatus.Height = 22
+$lblScratchStatus.Width = [Math]::Max(100, $pnlScratchStatus.ClientSize.Width - 200)
+$lblScratchStatus.AutoSize = $false
+$lblScratchStatus.Anchor = 'Top, Left, Right'
+$lblScratchStatus.Font = New-UiFont -Size 9
+$lblScratchStatus.ForeColor = $clrWarning
+$lblScratchStatus.BackColor = [System.Drawing.Color]::Transparent
+
+$btnCleanScratch = New-DarkButton -Text 'Clean Previous Build' -Width 178 -Height 28 -Role 'Danger'
+$btnCleanScratch.Top = 4
+$btnCleanScratch.Left = [Math]::Max(0, $pnlScratchStatus.ClientSize.Width - 182)
+$btnCleanScratch.Anchor = 'Top, Right'
+$btnCleanScratch.Visible = $false
+
+$pnlScratchStatus.Add_Resize({
+    $btnCleanScratch.Left = [Math]::Max(0, $pnlScratchStatus.ClientSize.Width - 182)
+    $lblScratchStatus.Width = [Math]::Max(100, $btnCleanScratch.Left - 8)
+})
+$pnlScratchStatus.Controls.Add($lblScratchStatus)
+$pnlScratchStatus.Controls.Add($btnCleanScratch)
+$topPanel.Controls.Add($pnlScratchStatus)
+
+function Update-ScratchDirStatusUi {
+    param([string]$Path)
+    $markerName = if (-not [string]::IsNullOrWhiteSpace([string]$sync.ScratchMarkerFileName)) { [string]$sync.ScratchMarkerFileName } else { '.oximize_scratch.marker' }
+    $status = Get-ScratchDirStatus -ScratchPath $Path -MarkerFileName $markerName
+    switch ($status.Status) {
+        'PreviousBuild' {
+            $ts = if ($null -ne $status.MarkerTimestamp) { " (started {0:yyyy-MM-dd HH:mm})" -f $status.MarkerTimestamp } else { '' }
+            $sizeInfo = if ($status.TotalSizeMB -gt 0) { ", {0} MB" -f $status.TotalSizeMB } else { '' }
+            $lblScratchStatus.Text = "Previous build artifacts detected{0}{1} — click Clean to remove." -f $ts, $sizeInfo
+            $lblScratchStatus.ForeColor = $clrWarning
+            $btnCleanScratch.Visible = $true
+            $pnlScratchStatus.Visible = $true
+        }
+        'Foreign' {
+            $lblScratchStatus.Text = "Folder contains files not created by Oximize OS — choose a different folder or empty it first."
+            $lblScratchStatus.ForeColor = $clrError
+            $btnCleanScratch.Visible = $false
+            $pnlScratchStatus.Visible = $true
+        }
+        'Ready' {
+            $lblScratchStatus.Text = "Previous Oximize scratch directory (marker present, empty) — ready to reuse."
+            $lblScratchStatus.ForeColor = $clrSuccess
+            $btnCleanScratch.Visible = $false
+            $pnlScratchStatus.Visible = $true
+        }
+        default {
+            $pnlScratchStatus.Visible = $false
+        }
+    }
+}
 
 $btnSettings = New-DarkButton -Text '' -Width 54 -Height 44 -Role 'Icon'
 $btnSettings.ImageAlign = 'MiddleLeft'
@@ -3435,6 +3557,7 @@ $btnBrowseScr.Add_Click({
             if (-not [string]::IsNullOrWhiteSpace($selectedFolder)) {
                 Set-PathTextBoxValue -Control $tbScratch -Value $selectedFolder
                 $sync.ScratchDir = $selectedFolder
+                Update-ScratchDirStatusUi -Path $selectedFolder
             }
         }
         catch { [System.Windows.Forms.MessageBox]::Show("Error: $_", "Error", "OK", "Error") }
@@ -3446,6 +3569,35 @@ $tbOutputISO.Add_Click({ $btnBrowseOut.PerformClick() })
 $tbOutputISO.Add_DoubleClick({ $btnBrowseOut.PerformClick() })
 $tbScratch.Add_Click({ $btnBrowseScr.PerformClick() })
 $tbScratch.Add_DoubleClick({ $btnBrowseScr.PerformClick() })
+$tbScratch.Add_TextChanged({
+        Update-ScratchDirStatusUi -Path (Get-PathTextBoxValue -Control $tbScratch)
+    })
+
+$btnCleanScratch.Add_Click({
+        $currentPath = Get-PathTextBoxValue -Control $tbScratch
+        if ([string]::IsNullOrWhiteSpace($currentPath)) { return }
+        $markerName = if (-not [string]::IsNullOrWhiteSpace([string]$sync.ScratchMarkerFileName)) { [string]$sync.ScratchMarkerFileName } else { '.oximize_scratch.marker' }
+        $status = Get-ScratchDirStatus -ScratchPath $currentPath -MarkerFileName $markerName
+        if (-not $status.HasMarker) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "This directory does not contain an Oximize OS build marker and cannot be cleaned automatically.`n`nOnly directories previously used by Oximize OS (containing .oximize_scratch.marker) can be cleaned here.",
+                "Cannot Clean Directory", "OK", "Warning") | Out-Null
+            return
+        }
+        $sizeInfo = if ($status.TotalSizeMB -gt 0) { ("`n`nEstimated size: {0} MB" -f $status.TotalSizeMB) } else { '' }
+        $confirm = [System.Windows.Forms.MessageBox]::Show(
+            ("Delete all previous build artifacts from:`n{0}{1}`n`nThis action cannot be undone." -f $status.Path, $sizeInfo),
+            "Clean Previous Build", "YesNo", "Warning")
+        if ($confirm -ne 'Yes') { return }
+        try {
+            Remove-Item -Path $status.Path -Recurse -Force -ErrorAction Stop
+            [System.Windows.Forms.MessageBox]::Show("Previous build cleaned successfully.", "Clean Complete", "OK", "Information") | Out-Null
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show("Failed to clean directory:`n$_", "Clean Failed", "OK", "Error") | Out-Null
+        }
+        Update-ScratchDirStatusUi -Path (Get-PathTextBoxValue -Control $tbScratch)
+    })
 
 function Update-SectionLayout {
     $panelMainUI.SuspendLayout()
@@ -13424,6 +13576,7 @@ $btnStart.Add_Click({
         }
         catch {}
 
+        $pnlScratchStatus.Visible = $false
         $sync.ProcessRunning = $true
         $sync.CancelRequested = $false
         $sync.IsMounted = $false
